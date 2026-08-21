@@ -12,12 +12,16 @@
   self-test without a wrapper process.
   - Curiosity poke: `--test` must work both from a checkout and from the
     immutable Nix package without assuming the old repository layout.
-- [ ] Import the remaining dotfiles regression coverage, prove it passes
+- [x] Import the remaining dotfiles regression coverage, prove it passes
   against the standalone implementation, then remove the duplicate dotfiles
   executable, helper, and tests.
   Import completed 2026-08-21 04:10 PM EDT: 18 standalone cases, the legacy
   64/66-case platform-dependent contract, and three stripped-Bash/isolation
-  cases pass both on the host and in the Nix sandbox. Dotfiles removal remains.
+  cases pass both on the host and in the Nix sandbox.
+  Completed 2026-08-21 04:25 PM EDT: dotfiles commit `b64ecc6` removed all four
+  legacy files, pins this package for its sandbox/dev shell, passed 178 host
+  tests, 131 hermetic tests, and its 178-test pre-push gate. Fresh shells use
+  this repository's `bin/glob` directly.
   - Curiosity poke: fresh interactive shells must resolve `glob` through
     `.pathconfig`'s `~/Code/*/bin` discovery and never a stale Bash hash entry.
 
