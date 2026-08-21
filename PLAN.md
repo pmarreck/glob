@@ -14,4 +14,5 @@
   - Curiosity poke: a successful push does not independently prove the remote ref matches.
 - [x] Provision and inspect the canonical push webhook. (2026-08-21 03:00 PM EDT)
 - [ ] Verify exact-commit `PASSING` in Mechatron Prime.
+  - Retry checkpoint: `ff621ea` was claimed, then its GitHub flake prefetch hung in `CLOSE-WAIT`. A worker restart exhausted its stop timeout, and redelivering the same signed push was correctly deduplicated. This content commit creates the fresh signed push event for exact-SHA verification.
   - Curiosity poke: the global worker queue may delay this repo behind unrelated builds.
