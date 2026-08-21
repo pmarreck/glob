@@ -10,7 +10,8 @@
   - Curiosity poke: CI must realize intentional outputs, not merely evaluate them.
 - [x] Document the design opinion and early-Unix history with direct primary-source citations. (2026-08-21 02:52 PM EDT)
   - Curiosity poke: early `/etc/glob` was separate, but pathname expansion was already shell-triggered in V1.
-- [ ] Publish `pmarreck/glob` on `yolo` and verify the exact commit remotely.
+- [x] Publish `pmarreck/glob` on `yolo` and verify the exact commit remotely. (2026-08-21 02:55 PM EDT)
   - Curiosity poke: a successful push does not independently prove the remote ref matches.
-- [ ] Provision the webhook and verify exact-commit `PASSING` in Mechatron Prime.
+- [x] Provision and inspect the canonical push webhook. (2026-08-21 03:00 PM EDT)
+- [ ] Verify exact-commit `PASSING` in Mechatron Prime.
   - Curiosity poke: the global worker queue may delay this repo behind unrelated builds.
