@@ -27,8 +27,12 @@
 						dontBuild = true;
 						installPhase = ''
 							runHook preInstall
-							install -Dm755 glob "$out/bin/glob"
+							install -Dm755 bin/glob "$out/bin/glob"
 							install -Dm644 src/expand_glob.bash "$out/share/glob/expand_glob.bash"
+							install -Dm755 test "$out/share/glob/test"
+							install -Dm755 tests/cli/glob_test "$out/share/glob/tests/cli/glob_test"
+							install -Dm755 tests/compat/dotfiles_glob_test "$out/share/glob/tests/compat/dotfiles_glob_test"
+							install -Dm755 tests/compat/dotfiles_no_compgen_test "$out/share/glob/tests/compat/dotfiles_no_compgen_test"
 							patchShebangs "$out/bin/glob"
 							wrapProgram "$out/bin/glob" \
 								--prefix PATH : ${pkgs.lib.makeBinPath runtimeTools}
@@ -73,7 +77,7 @@
 						doCheck = true;
 						checkPhase = ''
 							runHook preCheck
-							patchShebangs glob test tests/cli/glob_test src/expand_glob.bash
+							patchShebangs bin/glob test tests/cli/glob_test tests/compat/dotfiles_glob_test tests/compat/dotfiles_no_compgen_test src/expand_glob.bash
 							./test
 							runHook postCheck
 						'';

@@ -1,5 +1,21 @@
 # Plan
 
+- [x] Make `bin/glob` the canonical source-tree executable while preserving
+  `$out/bin/glob` in the installed package.
+  Completed 2026-08-21 04:10 PM EDT: the source executable moved under
+  `bin/`, checkout and installed `--test` discovery both work, and the Nix
+  package plus complete flake check pass.
+  - Curiosity poke: `--test` must work both from a checkout and from the
+    immutable Nix package without assuming the old repository layout.
+- [ ] Import the remaining dotfiles regression coverage, prove it passes
+  against the standalone implementation, then remove the duplicate dotfiles
+  executable, helper, and tests.
+  Import completed 2026-08-21 04:10 PM EDT: 18 standalone cases, the legacy
+  64/66-case platform-dependent contract, and three stripped-Bash/isolation
+  cases pass both on the host and in the Nix sandbox. Dotfiles removal remains.
+  - Curiosity poke: fresh interactive shells must resolve `glob` through
+    `.pathconfig`'s `~/Code/*/bin` discovery and never a stale Bash hash entry.
+
 - [x] Port the dotfiles behavior into isolated characterization tests. (2026-08-21 02:50 PM EDT)
   - Curiosity poke: filenames can contain spaces, quotes, newlines, and leading dashes.
 - [x] Package the existing Bash implementation without dotfiles dependencies. (2026-08-21 02:50 PM EDT)

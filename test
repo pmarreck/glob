@@ -15,6 +15,8 @@ run_suite() {
 }
 
 run_suite "$repo_root/tests/cli/glob_test"
+run_suite "$repo_root/tests/compat/dotfiles_glob_test"
+run_suite "$repo_root/tests/compat/dotfiles_no_compgen_test"
 
 if (( failures == 0 )); then
 	printf 'All test suites passed.\n'

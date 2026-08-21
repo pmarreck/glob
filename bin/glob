@@ -3,16 +3,18 @@
 GLOB_VERSION=${GLOB_VERSION:-0.1.0}
 
 script_dir=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+glob_helper=''
 if ! declare -F expand_glob >/dev/null 2>&1; then
-	if [[ -r "$script_dir/src/expand_glob.bash" ]]; then
-		. "$script_dir/src/expand_glob.bash"
+	if [[ -r "$script_dir/../src/expand_glob.bash" ]]; then
+		glob_helper="$script_dir/../src/expand_glob.bash"
 	elif [[ -r "$script_dir/../share/glob/expand_glob.bash" ]]; then
-		# shellcheck disable=SC1091
-		. "$script_dir/../share/glob/expand_glob.bash"
+		glob_helper="$script_dir/../share/glob/expand_glob.bash"
 	else
 		printf 'glob: cannot locate expand_glob.bash\n' >&2
 		exit 127
 	fi
+	# shellcheck disable=SC1090
+	. "$glob_helper"
 fi
 
 debug() {
@@ -246,7 +248,18 @@ glob_main() {
 			return 0
 			;;
 		--test)
-			"$script_dir/test"
+			local test_runner
+			if [[ -x "$script_dir/../test" ]]; then
+				test_runner="$script_dir/../test"
+			elif [[ -x "$script_dir/../share/glob/test" ]]; then
+				test_runner="$script_dir/../share/glob/test"
+			else
+				printf 'glob: cannot locate standalone test suite\n' >&2
+				return 127
+			fi
+			GLOB_BIN="$script_dir/${BASH_SOURCE[0]##*/}" \
+				GLOB_HELPER="$glob_helper" \
+				"$test_runner"
 			return $?
 			;;
 	esac

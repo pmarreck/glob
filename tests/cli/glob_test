@@ -3,7 +3,7 @@
 set -u
 
 repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/../.." && pwd)
-glob_bin="$repo_root/glob"
+glob_bin="${GLOB_BIN:-$repo_root/bin/glob}"
 tests=0
 failures=0
 

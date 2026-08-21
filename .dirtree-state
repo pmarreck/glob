@@ -4,7 +4,9 @@ annotate=[
 	.mechatron-prime/targets = Intentional Mechatron Prime flake targets
 	README.md = Usage, design rationale, and primary-source Unix history
 	flake.nix = Nix package, checks, app, and LuaJIT development shell
-	glob = Standalone explicit pathname-expansion CLI
+	bin/glob = Standalone explicit pathname-expansion CLI; source layout matches dotfiles PATH discovery
 	src/expand_glob.bash = Subshell-isolated Bash pattern expansion helper
 	tests/cli/glob_test = CLI characterization and regression suite
+	tests/compat/dotfiles_glob_test = Full legacy dotfiles behavior contract, now self-contained
+	tests/compat/dotfiles_no_compgen_test = Legacy stripped-Bash and shell-option isolation regressions
 ]
