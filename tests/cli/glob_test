@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+
+set -u
+
+repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/../.." && pwd)
+glob_bin="$repo_root/glob"
+tests=0
+failures=0
+
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/glob-test.XXXXXX") || exit 1
+trap 'case "$scratch" in "${TMPDIR:-/tmp}"/glob-test.*) rm -rf -- "$scratch";; esac' EXIT
+
+stdout_file="$scratch/stdout"
+stderr_file="$scratch/stderr"
+status=0
+
+run() {
+	: >"$stdout_file"
+	: >"$stderr_file"
+	(
+		cd "$scratch/work" || exit 125
+		"$glob_bin" "$@"
+	) >"$stdout_file" 2>"$stderr_file"
+	status=$?
+}
+
+run_env() {
+	: >"$stdout_file"
+	: >"$stderr_file"
+	(
+		cd "$scratch/work" || exit 125
+		env "$@"
+	) >"$stdout_file" 2>"$stderr_file"
+	status=$?
+}
+
+pass() {
+	printf 'ok %d - %s\n' "$tests" "$1"
+}
+
+fail() {
+	printf 'not ok %d - %s\n' "$tests" "$1" >&2
+	shift
+	printf '  %s\n' "$@" >&2
+	failures=$((failures + 1))
+}
+
+check_result() {
+	local description=$1 expected_status=$2 expected_stdout=$3 expected_stderr=$4
+	local actual_stdout actual_stderr
+	tests=$((tests + 1))
+	actual_stdout=$(cat "$stdout_file")
+	actual_stderr=$(cat "$stderr_file")
+	if [[ "$status" == "$expected_status" && "$actual_stdout" == "$expected_stdout" && "$actual_stderr" == "$expected_stderr" ]]; then
+		pass "$description"
+	else
+		fail "$description" \
+			"status: expected $expected_status, got $status" \
+			"stdout: expected <$expected_stdout>, got <$actual_stdout>" \
+			"stderr: expected <$expected_stderr>, got <$actual_stderr>"
+	fi
+}
+
+check_contains() {
+	local description=$1 expected_status=$2 stdout_fragment=$3 stderr_fragment=$4
+	local actual_stdout actual_stderr
+	tests=$((tests + 1))
+	actual_stdout=$(cat "$stdout_file")
+	actual_stderr=$(cat "$stderr_file")
+	if [[ "$status" == "$expected_status" && "$actual_stdout" == *"$stdout_fragment"* && "$actual_stderr" == *"$stderr_fragment"* ]]; then
+		pass "$description"
+	else
+		fail "$description" \
+			"status: expected $expected_status, got $status" \
+			"stdout lacks <$stdout_fragment>: <$actual_stdout>" \
+			"stderr lacks <$stderr_fragment>: <$actual_stderr>"
+	fi
+}
+
+mkdir -p "$scratch/work/nested/deeper"
+touch "$scratch/work/alpha.txt" "$scratch/work/beta.txt" "$scratch/work/file with spaces.txt"
+touch "$scratch/work/nested/gamma.txt" "$scratch/work/nested/deeper/delta.txt"
+touch "$scratch/work/image.JPG" "$scratch/work/image.png" "$scratch/work/.hidden.txt"
+
+run '*.txt'
+check_result 'direct mode classifies and code-point sorts a set' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+
+run '*.txt' '*.png' 'missing-*.log'
+check_result 'multiple patterns form a sorted union while misses disappear' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nimage.png' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+
+run 'missing-*.txt'
+check_result 'an unmatched pattern explains exit 1' 1 '' 'Error: No matches found for pattern(s): missing-*.txt'
+
+run printf '<%s>\n' 'literal first' '*.png' '*.txt'
+check_result 'command mode preserves literal and pattern order' 0 $'<literal first>\n<image.png>\n<alpha.txt>\n<beta.txt>\n<file with spaces.txt>' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+
+run '**/*.txt'
+check_result 'globstar recursively classifies nested paths' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nnested/deeper/delta.txt\nnested/gamma.txt' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+
+run --dotglob '*.txt'
+check_result '--dotglob includes hidden members without a warning' 0 $'.hidden.txt\nalpha.txt\nbeta.txt\nfile with spaces.txt' ''
+
+run -i 'image.*'
+check_result 'case-insensitive mode expands a mixed-case set' 0 $'image.JPG\nimage.png' ''
+
+run '*.{txt,png}'
+check_result 'quoted brace expansion combines pattern sets' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nimage.png' ''
+
+run '@(*.JPG|*.png)'
+check_result 'extended globs classify alternatives' 0 $'image.JPG\nimage.png' ''
+
+run -n '*.txt'
+check_result '-n emits shell-escaped space-separated output' 0 'alpha.txt beta.txt file\ with\ spaces.txt ' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+
+run -0 '*.png'
+tests=$((tests + 1))
+if [[ "$status" == 0 && "$(od -An -tx1 "$stdout_file" | tr -d ' \n')" == '696d6167652e706e6700' && ! -s "$stderr_file" ]]; then
+	pass '-0 emits a NUL-terminated record'
+else
+	fail '-0 emits a NUL-terminated record' "status=$status hex=$(od -An -tx1 "$stdout_file" | tr -d ' \n') stderr=$(cat "$stderr_file")"
+fi
+
+touch "$scratch/work/file \"quote\".txt"
+run --double-quote 'file *quote*.txt'
+check_result '--double-quote escapes embedded quotes without an external helper' 0 '"file \"quote\".txt"' ''
+
+run --double-quote printf '%s\n' '*.txt'
+check_result '--double-quote rejects command mode' 2 '' 'Error: --double-quote cannot be used with command execution'
+
+run --dry-run printf '<%s>\n' '*.png'
+check_result '--dry-run prints a shell-escaped command and does not execute it' 0 '' $'\033[33mprintf \\<%s\\>\\\\n image.png\033[0m'
+
+disable_compgen="$scratch/disable-compgen"
+printf 'enable -n compgen 2>/dev/null\n' >"$disable_compgen"
+run_env BASH_ENV="$disable_compgen" "$glob_bin" '*.png'
+check_result 'expansion does not depend on compgen' 0 'image.png' ''
+
+run --help
+check_contains 'help documents controlled expansion' 0 'glob: A utility for controlled glob expansion' ''
+
+run --about
+check_contains '--about reports one line with version and runtime platform' 0 'glob ' ''
+tests=$((tests + 1))
+about_lines=$(wc -l <"$stdout_file" | tr -d ' ')
+if [[ "$status" == 0 && "$about_lines" == 1 && "$(cat "$stdout_file")" == *"$(uname -s)"* && "$(cat "$stdout_file")" == *"$(uname -m)"* && ! -s "$stderr_file" ]]; then
+	pass '--about includes OS and architecture'
+else
+	fail '--about includes OS and architecture' "status=$status lines=$about_lines stdout=$(cat "$stdout_file") stderr=$(cat "$stderr_file")"
+fi
+
+if (( failures == 0 )); then
+	printf '1..%d\n' "$tests"
+else
+	printf '1..%d\n%d of %d CLI tests failed.\n' "$tests" "$failures" "$tests" >&2
+fi
+
+exit "$failures"

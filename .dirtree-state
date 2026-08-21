@@ -1,0 +1,10 @@
+# Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
+ver=1.2
+annotate=[
+	.mechatron-prime/targets = Intentional Mechatron Prime flake targets
+	README.md = Usage, design rationale, and primary-source Unix history
+	flake.nix = Nix package, checks, app, and LuaJIT development shell
+	glob = Standalone explicit pathname-expansion CLI
+	src/expand_glob.bash = Subshell-isolated Bash pattern expansion helper
+	tests/cli/glob_test = CLI characterization and regression suite
+]

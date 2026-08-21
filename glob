@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+
+GLOB_VERSION=${GLOB_VERSION:-0.1.0}
+
+script_dir=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+if ! declare -F expand_glob >/dev/null 2>&1; then
+	if [[ -r "$script_dir/src/expand_glob.bash" ]]; then
+		. "$script_dir/src/expand_glob.bash"
+	elif [[ -r "$script_dir/../share/glob/expand_glob.bash" ]]; then
+		# shellcheck disable=SC1091
+		. "$script_dir/../share/glob/expand_glob.bash"
+	else
+		printf 'glob: cannot locate expand_glob.bash\n' >&2
+		exit 127
+	fi
+fi
+
+debug() {
+	[[ -n ${DEBUG:-} ]] && printf 'DEBUG: %s\n' "$*" >&2
+}
+
+show_help() {
+	cat <<'EOF'
+glob: A utility for controlled glob expansion
+
+USAGE:
+	glob [OPTIONS] PATTERN                   Expand patterns and print results
+	glob [OPTIONS] COMMAND [ARG...]          Run a command with expanded arguments
+	glob --test                              Run the standalone test suite
+	glob -h, --help                          Show this help
+	glob --about                             Show version and runtime platform
+
+OPTIONS:
+	-i, --ignore-case                Case-insensitive pattern matching
+	--dotglob, --dotfiles            Include dotfiles in matches
+	--all                            No restrictions (includes dotfiles)
+	--batch                          Run a command in ARG_MAX-safe chunks
+	--dry-run, --debug               Show the expanded command without running it
+	--double-quote                   Double-quoted, newline-separated output
+	-n                               Shell-escaped, space-separated output
+	-0                               NUL-separated output
+
+EXAMPLES:
+	glob '*.jpg'
+	glob -i '*.{png,jpg,gif}'
+	glob '**/*.jpg'
+	glob --dotglob '**/*.par2'
+	glob printf '<%s>\n' '*.jpg'
+	glob --batch rm '**/*.par2'
+
+Patterns that match nothing are omitted. Direct mode exits 1 when nothing
+matches. Output is sorted in locale-independent code-point order. Command mode
+preserves argument order and sorts only the members expanded from each pattern.
+EOF
+}
+
+show_about() {
+	printf 'glob %s: controlled pathname expansion (%s %s)\n' "$GLOB_VERSION" "$(uname -s)" "$(uname -m)"
+}
+
+is_pattern() {
+	local value=$1
+	[[ "$value" == *[\*\?\[]* || "$value" =~ [\?\*\+\@\!]\( ]]
+}
+
+expand_braces() {
+	local value=$1
+	if [[ ! "$value" =~ \{[^\}]*,[^\}]*\} ]]; then
+		printf '%s\n' "$value"
+		return 0
+	fi
+
+	# This preserves the existing command's quoted-brace behavior. Spaces and
+	# extglob parentheses are escaped before a fresh Bash parses the braces.
+	local escaped=${value// /\\ }
+	escaped=${escaped//(/\\(}
+	escaped=${escaped//)/\\)}
+	bash -c "printf '%s\\n' $escaped" 2>/dev/null
+}
+
+get_arg_max() {
+	if [[ -n ${GLOB_ARG_MAX:-} && ${GLOB_ARG_MAX:-} =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$GLOB_ARG_MAX"
+		return 0
+	fi
+	local value
+	value=$(getconf ARG_MAX 2>/dev/null) || return 1
+	[[ "$value" =~ ^[0-9]+$ ]] || return 1
+	printf '%s\n' "$value"
+}
+
+get_arg_budget() {
+	local maximum buffer
+	maximum=$(get_arg_max) || return 1
+	buffer=$((maximum / 10))
+	(( buffer < 4096 )) && buffer=4096
+	if (( maximum > buffer )); then
+		printf '%s\n' "$((maximum - buffer))"
+	else
+		printf '%s\n' "$maximum"
+	fi
+}
+
+argument_bytes() {
+	local total=0 item
+	for item in "$@"; do
+		total=$((total + ${#item} + 1))
+	done
+	printf '%s\n' "$total"
+}
+
+format_duration() {
+	local seconds=$1 hours minutes
+	hours=$((seconds / 3600))
+	minutes=$(((seconds % 3600) / 60))
+	seconds=$((seconds % 60))
+	if (( hours > 0 )); then
+		printf '%dh%02dm%02ds' "$hours" "$minutes" "$seconds"
+	elif (( minutes > 0 )); then
+		printf '%dm%02ds' "$minutes" "$seconds"
+	else
+		printf '%ds' "$seconds"
+	fi
+}
+
+run_batched() {
+	local command_name=$1
+	shift
+	local budget chunk_budget base_size item item_size
+	budget=$(get_arg_budget) || budget=''
+	if [[ -z "$budget" ]]; then
+		printf 'Warning: ARG_MAX unavailable; batching one argument per command\n' >&2
+		local index=0 overall=0 count=$# rc
+		for item in "$@"; do
+			"$command_name" "$item"
+			rc=$?
+			(( rc != 0 )) && overall=$rc
+			index=$((index + 1))
+			printf 'Batch %d/%d done' "$index" "$count" >&2
+			(( index < count )) && printf ' (ETA ~%s)' "$(format_duration "$((count - index))")" >&2
+			printf '\n' >&2
+		done
+		return "$overall"
+	fi
+
+	base_size=$((${#command_name} + 1))
+	chunk_budget=$((budget / 2))
+	(( chunk_budget <= base_size )) && chunk_budget=$budget
+
+	local count=0 size=$base_size members=0
+	for item in "$@"; do
+		item_size=$((${#item} + 1))
+		if (( item_size + base_size > budget )); then
+			printf 'Error: argument too long for system ARG_MAX; cannot batch safely: %s\n' "$item" >&2
+			return 2
+		fi
+		if (( members > 0 && size + item_size > chunk_budget )); then
+			count=$((count + 1))
+			size=$base_size
+			members=0
+		fi
+		if (( item_size + base_size > chunk_budget )); then
+			(( members > 0 )) && count=$((count + 1))
+			count=$((count + 1))
+			size=$base_size
+			members=0
+			continue
+		fi
+		size=$((size + item_size))
+		members=$((members + 1))
+	done
+	(( members > 0 )) && count=$((count + 1))
+
+	if (( count > 1 )); then
+		local total_bytes
+		total_bytes=$(argument_bytes "$command_name" "$@")
+		if (( total_bytes > budget )); then
+			printf 'Results > ARG_MAX; batching results into %d batches:\n' "$count" >&2
+		else
+			printf 'Batching results into %d batches:\n' "$count" >&2
+		fi
+	fi
+
+	local chunk=() index=0 overall=0 rc
+	size=$base_size
+	for item in "$@"; do
+		item_size=$((${#item} + 1))
+		if (( item_size + base_size > chunk_budget )); then
+			if (( ${#chunk[@]} > 0 )); then
+				"$command_name" "${chunk[@]}"
+				rc=$?
+				(( rc != 0 )) && overall=$rc
+				index=$((index + 1))
+				printf 'Batch %d/%d done' "$index" "$count" >&2
+				(( index < count )) && printf ' (ETA ~%s)' "$(format_duration "$((count - index))")" >&2
+				printf '\n' >&2
+				chunk=()
+				size=$base_size
+			fi
+			"$command_name" "$item"
+			rc=$?
+			(( rc != 0 )) && overall=$rc
+			index=$((index + 1))
+			printf 'Batch %d/%d done' "$index" "$count" >&2
+			(( index < count )) && printf ' (ETA ~%s)' "$(format_duration "$((count - index))")" >&2
+			printf '\n' >&2
+			continue
+		fi
+		if (( ${#chunk[@]} > 0 && size + item_size > chunk_budget )); then
+			"$command_name" "${chunk[@]}"
+			rc=$?
+			(( rc != 0 )) && overall=$rc
+			index=$((index + 1))
+			printf 'Batch %d/%d done' "$index" "$count" >&2
+			(( index < count )) && printf ' (ETA ~%s)' "$(format_duration "$((count - index))")" >&2
+			printf '\n' >&2
+			chunk=()
+			size=$base_size
+		fi
+		chunk+=("$item")
+		size=$((size + item_size))
+	done
+	if (( ${#chunk[@]} > 0 )); then
+		"$command_name" "${chunk[@]}"
+		rc=$?
+		(( rc != 0 )) && overall=$rc
+		index=$((index + 1))
+		printf 'Batch %d/%d done\n' "$index" "$count" >&2
+	fi
+	return "$overall"
+}
+
+glob_main() {
+	if (( $# == 0 )); then
+		printf 'Error: No arguments provided\n' >&2
+		show_help >&2
+		return 2
+	fi
+	case $1 in
+		-h|--help)
+			show_help
+			return 0
+			;;
+		--about)
+			show_about
+			return 0
+			;;
+		--test)
+			"$script_dir/test"
+			return $?
+			;;
+	esac
+
+	local ignore_case=false include_dotfiles=false batch=false dry_run=false
+	local output_format=newline double_quote=false space_flag=false null_flag=false
+	local parsed=()
+	while (( $# > 0 )); do
+		case $1 in
+			-i|--ignore-case) ignore_case=true ;;
+			--dotglob|--dotfiles|--all) include_dotfiles=true ;;
+			--batch) batch=true ;;
+			--dry-run|--debug) dry_run=true ;;
+			--double-quote) output_format=double-quote; double_quote=true ;;
+			-n) output_format=space; space_flag=true ;;
+			-0) output_format=null; null_flag=true ;;
+			*) parsed+=("$1") ;;
+		esac
+		shift
+	done
+	set -- "${parsed[@]}"
+
+	if $double_quote; then
+		$space_flag && printf 'Warning: -n is ignored when --double-quote is used\n' >&2
+		$null_flag && printf 'Warning: -0 is ignored when --double-quote is used\n' >&2
+		output_format=double-quote
+	fi
+	if (( $# == 0 )); then
+		printf 'Error: No arguments provided after option parsing\n' >&2
+		show_help >&2
+		return 2
+	fi
+
+	local brace_expanded=() argument expanded
+	for argument in "$@"; do
+		expanded=$(expand_braces "$argument") || expanded=$argument
+		while IFS= read -r argument; do
+			[[ -n "$argument" ]] && brace_expanded+=("$argument")
+		done <<<"$expanded"
+	done
+
+	local command_name='' resolved='' candidate=${brace_expanded[0]}
+	if [[ "$candidate" == */* ]]; then
+		[[ -x "$candidate" && ! -d "$candidate" ]] && resolved=$candidate
+	else
+		resolved=$(type -P -- "$candidate" 2>/dev/null || true)
+	fi
+	if [[ -n "$resolved" && ! "$resolved" =~ \.(jpg|jpeg|png|gif|pdf|mp4|avi|mp3|wav|doc|docx|txt|log|csv)$ ]]; then
+		command_name=$candidate
+		brace_expanded=("${brace_expanded[@]:1}")
+	fi
+
+	if [[ -n "$command_name" ]] && $double_quote; then
+		printf 'Error: --double-quote cannot be used with command execution\n' >&2
+		return 2
+	fi
+	if [[ -z "$command_name" ]] && $dry_run; then
+		printf 'Error: --dry-run/--debug requires a command\n' >&2
+		return 2
+	fi
+	if [[ -z "$command_name" ]] && $batch; then
+		printf 'Error: --batch requires a command\n' >&2
+		return 2
+	fi
+
+	local inherited_dotglob=false
+	shopt -q dotglob && inherited_dotglob=true
+	local expansion_options='extglob globstar'
+	($include_dotfiles || $inherited_dotglob) && expansion_options+=' dotglob'
+	$ignore_case && expansion_options+=' nocaseglob'
+
+	local found=false patterns=() processed=() matches=()
+	for argument in "${brace_expanded[@]}"; do
+		if [[ -n "$command_name" && "$argument" == -* ]]; then
+			processed+=("$argument")
+			continue
+		fi
+		if is_pattern "$argument"; then
+			patterns+=("$argument")
+			mapfile -t matches < <(expand_glob "$argument" "$expansion_options" | LC_ALL=C sort)
+			if (( ${#matches[@]} > 0 )); then
+				found=true
+				processed+=("${matches[@]}")
+			fi
+		else
+			found=true
+			processed+=("$argument")
+		fi
+	done
+
+	if ! $include_dotfiles && ! $inherited_dotglob && (( ${#patterns[@]} > 0 )); then
+		local warning=false pattern basename member
+		for pattern in "${patterns[@]}"; do
+			basename=${pattern##*/}
+			[[ "$basename" == .* ]] && continue
+			mapfile -t matches < <(expand_glob "$pattern" "$expansion_options dotglob")
+			for member in "${matches[@]}"; do
+				[[ ${member##*/} == .* ]] && warning=true && break 2
+			done
+		done
+		$warning && printf '\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m\n' >&2
+	fi
+
+	if ! $found; then
+		if (( ${#patterns[@]} > 0 )); then
+			printf 'Error: No matches found for pattern(s): %s\n' "${patterns[*]}" >&2
+		else
+			printf 'Error: No matches found\n' >&2
+		fi
+		return 1
+	fi
+
+	if [[ -n "$command_name" ]]; then
+		if $dry_run; then
+			local quoted=() member
+			for member in "${processed[@]}"; do
+				quoted+=("$(printf '%q' "$member")")
+			done
+			printf '\033[33m%s %s\033[0m\n' "$command_name" "${quoted[*]}" >&2
+			return 0
+		fi
+		if $batch; then
+			run_batched "$command_name" "${processed[@]}"
+			return $?
+		fi
+		local budget total maximum
+		budget=$(get_arg_budget) || budget=''
+		maximum=$(get_arg_max) || maximum=''
+		if [[ -n "$budget" ]]; then
+			total=$(argument_bytes "$command_name" "${processed[@]}")
+			if (( total > budget )); then
+				printf 'Error: expanded arguments exceed safe ARG_MAX budget (%d bytes > %d; system ARG_MAX %s). Re-run with --batch.\n' "$total" "$budget" "$maximum" >&2
+				return 2
+			fi
+		fi
+		"$command_name" "${processed[@]}"
+		return $?
+	fi
+
+	local sorted member
+	sorted=$(printf '%s\n' "${processed[@]}" | LC_ALL=C sort)
+	case $output_format in
+		double-quote)
+			while IFS= read -r member; do
+				[[ -z "$member" ]] && continue
+				member=${member//\"/\\\"}
+				printf '"%s"\n' "$member"
+			done <<<"$sorted"
+			;;
+		space)
+			while IFS= read -r member; do
+				[[ -z "$member" ]] && continue
+				printf '%q ' "$member"
+			done <<<"$sorted"
+			printf '\n'
+			;;
+		null)
+			while IFS= read -r member; do
+				[[ -z "$member" ]] && continue
+				printf '%s\0' "$member"
+			done <<<"$sorted"
+			;;
+		*)
+			while IFS= read -r member; do
+				[[ -z "$member" ]] && continue
+				printf '%s\n' "$member"
+			done <<<"$sorted"
+			;;
+	esac
+}
+
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+	glob_main "$@"
+fi

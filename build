@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -u
+
+repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+cd "$repo_root" || exit 1
+
+case ${1:-} in
+	'')
+		nix build .#default --print-build-logs
+		;;
+	--test)
+		nix flake check --print-build-logs
+		;;
+	-h|--help)
+		printf 'Usage: ./build [--test]\n'
+		printf '  no option  build the packaged glob command\n'
+		printf '  --test     realize every flake check\n'
+		;;
+	*)
+		printf 'build: unknown option: %s\n' "$1" >&2
+		printf 'Usage: ./build [--test]\n' >&2
+		exit 2
+		;;
+esac

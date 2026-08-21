@@ -1,0 +1,3 @@
+# Build the installable command and its isolated CLI suite on the Thelio worker.
+packages.x86_64-linux.default
+checks.x86_64-linux.test

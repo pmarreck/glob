@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -u
+
+repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
+failures=0
+
+run_suite() {
+	local suite=$1
+	"$suite"
+	local status=$?
+	if (( status != 0 )); then
+		failures=$((failures + status))
+	fi
+}
+
+run_suite "$repo_root/tests/cli/glob_test"
+
+if (( failures == 0 )); then
+	printf 'All test suites passed.\n'
+else
+	printf '%d test suite failure(s).\n' "$failures" >&2
+fi
+
+exit "$failures"
