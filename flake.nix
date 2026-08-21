@@ -23,7 +23,7 @@
 						version = "0.1.0";
 						src = ./.;
 						strictDeps = true;
-						nativeBuildInputs = [ pkgs.makeWrapper ];
+						nativeBuildInputs = [ pkgs.bash ];
 						dontBuild = true;
 						installPhase = ''
 							runHook preInstall
@@ -33,9 +33,20 @@
 							install -Dm755 tests/cli/glob_test "$out/share/glob/tests/cli/glob_test"
 							install -Dm755 tests/compat/dotfiles_glob_test "$out/share/glob/tests/compat/dotfiles_glob_test"
 							install -Dm755 tests/compat/dotfiles_no_compgen_test "$out/share/glob/tests/compat/dotfiles_no_compgen_test"
-							patchShebangs "$out/bin/glob"
-							wrapProgram "$out/bin/glob" \
-								--prefix PATH : ${pkgs.lib.makeBinPath runtimeTools}
+							substituteInPlace "$out/bin/glob" \
+								--replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash
+							PATH=${pkgs.lib.makeBinPath runtimeTools}:$PATH
+							export PATH'
+							for script in \
+								"$out/share/glob/test" \
+								"$out/share/glob/tests/cli/glob_test" \
+								"$out/share/glob/tests/compat/dotfiles_glob_test" \
+								"$out/share/glob/tests/compat/dotfiles_no_compgen_test" \
+								"$out/share/glob/expand_glob.bash"
+							do
+								substituteInPlace "$script" \
+									--replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
+							done
 							runHook postInstall
 						'';
 						meta = {
@@ -79,6 +90,8 @@
 							runHook preCheck
 							patchShebangs bin/glob test tests/cli/glob_test tests/compat/dotfiles_glob_test tests/compat/dotfiles_no_compgen_test src/expand_glob.bash
 							./test
+							${self.packages.${system}.default}/bin/glob --about >/dev/null
+							${self.packages.${system}.default}/bin/glob --test
 							runHook postCheck
 						'';
 						installPhase = ''

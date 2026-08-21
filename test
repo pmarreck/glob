@@ -5,6 +5,11 @@ set -u
 repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 failures=0
 
+if [[ -n ${GLOB_BIN:-} ]]; then
+	PATH="${GLOB_BIN%/*}:$PATH"
+	export PATH
+fi
+
 run_suite() {
 	local suite=$1
 	"$suite"

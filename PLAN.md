@@ -5,6 +5,11 @@
   Completed 2026-08-21 04:10 PM EDT: the source executable moved under
   `bin/`, checkout and installed `--test` discovery both work, and the Nix
   package plus complete flake check pass.
+  Packaging follow-up completed 2026-08-21 04:20 PM EDT: an in-sandbox
+  package smoke test caught both an unpatched `/usr/bin/env` shebang and
+  `wrapProgram` dropping caller `bash -O dotglob` state. The installed script
+  now carries an immutable runtime PATH directly and runs its full packaged
+  self-test without a wrapper process.
   - Curiosity poke: `--test` must work both from a checkout and from the
     immutable Nix package without assuming the old repository layout.
 - [ ] Import the remaining dotfiles regression coverage, prove it passes
