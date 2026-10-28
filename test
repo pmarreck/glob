@@ -5,6 +5,17 @@ set -u
 repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 failures=0
 
+if [[ -z ${GLOB_ENGINE:-} ]]; then
+	engine_out=$(nix build "$repo_root#engine" --no-link --print-out-paths)
+	status=$?
+	if (( status != 0 )) || [[ -z "$engine_out" ]]; then
+		printf 'test: failed to prepare glob-engine through Nix\n' >&2
+		exit 1
+	fi
+	GLOB_ENGINE="$engine_out/bin/glob-engine"
+	export GLOB_ENGINE
+fi
+
 if [[ -n ${GLOB_BIN:-} ]]; then
 	PATH="${GLOB_BIN%/*}:$PATH"
 	export PATH

@@ -77,10 +77,12 @@ check_contains() {
 	fi
 }
 
-mkdir -p "$scratch/work/nested/deeper"
+mkdir -p "$scratch/work/nested/deeper" "$scratch/work/.secret"
 touch "$scratch/work/alpha.txt" "$scratch/work/beta.txt" "$scratch/work/file with spaces.txt"
 touch "$scratch/work/nested/gamma.txt" "$scratch/work/nested/deeper/delta.txt"
 touch "$scratch/work/image.JPG" "$scratch/work/image.png" "$scratch/work/.hidden.txt"
+touch "$scratch/work/.secret/.hidden.txt"
+touch "$scratch/work/photo-2024.asset" "$scratch/work/photo-abcd.asset"
 
 run '*.txt'
 check_result 'direct mode classifies and code-point sorts a set' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
@@ -100,6 +102,9 @@ check_result 'globstar recursively classifies nested paths' 0 $'alpha.txt\nbeta.
 run --dotglob '*.txt'
 check_result '--dotglob includes hidden members without a warning' 0 $'.hidden.txt\nalpha.txt\nbeta.txt\nfile with spaces.txt' ''
 
+run '**/.hidden.txt'
+check_result 'an explicit dot component matches without traversing hidden parents' 0 '.hidden.txt' ''
+
 run -i 'image.*'
 check_result 'case-insensitive mode expands a mixed-case set' 0 $'image.JPG\nimage.png' ''
 
@@ -108,6 +113,13 @@ check_result 'quoted brace expansion combines pattern sets' 0 $'alpha.txt\nbeta.
 
 run '@(*.JPG|*.png)'
 check_result 'extended globs classify alternatives' 0 $'image.JPG\nimage.png' ''
+
+run 'photo-%r{[0-9]{4}}.asset'
+check_result 'inline regex is matched by the shared globlike engine' 0 'photo-2024.asset' ''
+
+run 'photo-%r{['
+check_result 'invalid shared patterns return a precise diagnostic' 2 '' \
+	'glob-engine: invalid pattern at byte 6: unclosed regex excerpt'
 
 run -n '*.txt'
 check_result '-n emits shell-escaped space-separated output' 0 'alpha.txt beta.txt file\ with\ spaces.txt ' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'

@@ -3,8 +3,10 @@
 [![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Fglob.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
 
 `glob` makes shell pathname expansion an explicit operation. Give it quoted
-Bash patterns to print deterministic matches, or put a command first to expand
-patterns into that command's argument list.
+patterns to print deterministic matches, or put a command first to expand
+patterns into that command's argument list. Its sole matching engine is
+[`globlike`](https://github.com/pmarreck/globlike); this project supplies the
+filesystem traversal, command execution, and output-format adapters around it.
 
 ```console
 $ set -f
@@ -64,9 +66,10 @@ Install into a Nix profile:
 nix profile install github:pmarreck/glob
 ```
 
-For development, `nix develop` supplies Bash, LuaJIT, and ShellCheck. The
-runtime package contains the Bash command and its expansion helper; it does not
-depend on Peter's dotfiles.
+For development, `nix develop` supplies Bash, Zig, LuaJIT, and ShellCheck. The
+runtime package contains the Bash command and a Zig filesystem adapter linked
+to the separately pinned `globlike` source. It does not depend on Peter's
+dotfiles, and it does not carry a second glob parser or translator.
 
 ## Usage
 
@@ -87,10 +90,12 @@ Options:
 - `-h`, `--help`: show command help.
 - `--about`: show version, runtime operating system, and architecture.
 
-Patterns support Bash `*`, `?`, bracket expressions, `**`, quoted brace
-expansion, and extended globs such as `@(*.jpg|*.png)`. Non-matching patterns
-are omitted. Direct mode exits 1 if nothing matches. Command mode preserves the
-caller's argument order while sorting each pattern's matches with `LC_ALL=C`.
+Patterns support `*`, `?`, bracket expressions, `**`, `%r{...}` inline regex
+excerpts, quoted brace expansion, and extended globs such as
+`@(*.jpg|*.png)`. The matching syntax comes from `globlike`; brace expansion
+remains a CLI adapter concern. Non-matching patterns are omitted. Direct mode
+exits 1 if nothing matches. Command mode preserves the caller's argument order
+while sorting each pattern's matches with `LC_ALL=C`.
 
 Paths containing newline characters are not supported. Use `-0` when ordinary
 whitespace or shell punctuation makes newline-separated output inconvenient.

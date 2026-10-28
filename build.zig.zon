@@ -1,0 +1,13 @@
+.{
+	.name = .glob,
+	.fingerprint = 0x87a155fef0426c32,
+	.version = "0.2.0",
+	.minimum_zig_version = "0.16.0",
+	.dependencies = .{
+		.globlike = .{
+			.url = "git+https://github.com/pmarreck/globlike#5976ebd6a353c9e508aa55b7e11cd18d7a10bdc7",
+			.hash = "globlike-0.3.0-EaeEy_PpAADihwpLVExzbdxdBjHo6GD4PSXQ-7FaQ_Am",
+		},
+	},
+	.paths = .{ "build.zig", "build.zig.zon", "src" },
+}

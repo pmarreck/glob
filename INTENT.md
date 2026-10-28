@@ -14,6 +14,9 @@ including Peter's shell workflow with automatic expansion disabled.
 - Preserve the characterized behavior of Peter's original dotfiles utility in
   a standalone package.
 - Keep installation and testing reproducible through Nix.
+- Use the separately maintained `globlike` library as the sole pattern-matching
+  engine; keep filesystem traversal, command execution, and presentation in this
+  CLI's adapters.
 
 ## Scope and non-goals
 
@@ -24,6 +27,10 @@ recursive patterns, brace expansion, and extended globs.
 It does not replace a shell, depend on Peter's dotfiles, or support pathnames
 containing newline characters. `group_with_count` remains outside the accepted
 scope unless Peter makes a separate explicit decision.
+
+The CLI must not maintain a second glob parser, translator, or matcher alongside
+`globlike`. Compatibility syntax needed by this command belongs in the shared
+library.
 
 ## Constraints
 
@@ -41,4 +48,5 @@ flake targets to pass at the exact published commit in Mechatron Prime.
 
 See [TERMINOLOGY.md](TERMINOLOGY.md) for project terms, [PLAN.md](PLAN.md) for
 active work, and [README.md](README.md) for the user-facing interface and
-historical sources.
+historical sources. The accepted engine migration is specified in
+[intents/globlike-engine.md](intents/globlike-engine.md).

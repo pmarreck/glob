@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
 
-GLOB_VERSION=${GLOB_VERSION:-0.1.0}
+GLOB_VERSION=${GLOB_VERSION:-0.2.0}
 
 script_dir=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
-glob_helper=''
-if ! declare -F expand_glob >/dev/null 2>&1; then
-	if [[ -r "$script_dir/../src/expand_glob.bash" ]]; then
-		glob_helper="$script_dir/../src/expand_glob.bash"
-	elif [[ -r "$script_dir/../share/glob/expand_glob.bash" ]]; then
-		glob_helper="$script_dir/../share/glob/expand_glob.bash"
-	else
-		printf 'glob: cannot locate expand_glob.bash\n' >&2
-		exit 127
+glob_engine=${GLOB_ENGINE:-}
+
+locate_glob_engine() {
+	if [[ -n "$glob_engine" && -x "$glob_engine" ]]; then
+		return 0
 	fi
-	# shellcheck disable=SC1090
-	. "$glob_helper"
-fi
+	if [[ -x "$script_dir/glob-engine" ]]; then
+		glob_engine="$script_dir/glob-engine"
+	elif [[ -x "$script_dir/../libexec/glob/glob-engine" ]]; then
+		glob_engine="$script_dir/../libexec/glob/glob-engine"
+	else
+		printf 'glob: cannot locate glob-engine; run ./build or install the Nix package\n' >&2
+		return 127
+	fi
+}
+
+expand_with_engine() {
+	local pattern=$1 ignore_case=$2 include_dotfiles=$3
+	locate_glob_engine || return
+	local options=()
+	$ignore_case && options+=(--ignore-case)
+	$include_dotfiles && options+=(--dotglob)
+	"$glob_engine" "${options[@]}" "$pattern"
+}
 
 debug() {
 	[[ -n ${DEBUG:-} ]] && printf 'DEBUG: %s\n' "$*" >&2
@@ -53,6 +64,8 @@ EXAMPLES:
 Patterns that match nothing are omitted. Direct mode exits 1 when nothing
 matches. Output is sorted in locale-independent code-point order. Command mode
 preserves argument order and sorts only the members expanded from each pattern.
+Pattern matching is provided by globlike, including `%r{...}` inline regex
+excerpts.
 EOF
 }
 
@@ -62,7 +75,7 @@ show_about() {
 
 is_pattern() {
 	local value=$1
-	[[ "$value" == *[\*\?\[]* || "$value" =~ [\?\*\+\@\!]\( ]]
+	[[ "$value" == *[\*\?\[]* || "$value" == *'%r'* || "$value" == glob:* || "$value" == regex:* || "$value" =~ [\?\*\+\@\!]\( ]]
 }
 
 expand_braces() {
@@ -257,8 +270,9 @@ glob_main() {
 				printf 'glob: cannot locate standalone test suite\n' >&2
 				return 127
 			fi
+			locate_glob_engine || return
 			GLOB_BIN="$script_dir/${BASH_SOURCE[0]##*/}" \
-				GLOB_HELPER="$glob_helper" \
+				GLOB_ENGINE="$glob_engine" \
 				"$test_runner"
 			return $?
 			;;
@@ -327,11 +341,10 @@ glob_main() {
 
 	local inherited_dotglob=false
 	shopt -q dotglob && inherited_dotglob=true
-	local expansion_options='extglob globstar'
-	($include_dotfiles || $inherited_dotglob) && expansion_options+=' dotglob'
-	$ignore_case && expansion_options+=' nocaseglob'
+	local engine_dotglob=false
+	($include_dotfiles || $inherited_dotglob) && engine_dotglob=true
 
-	local found=false patterns=() processed=() matches=()
+	local found=false patterns=() processed=() matches=() engine_output engine_status
 	for argument in "${brace_expanded[@]}"; do
 		if [[ -n "$command_name" && "$argument" == -* ]]; then
 			processed+=("$argument")
@@ -339,7 +352,13 @@ glob_main() {
 		fi
 		if is_pattern "$argument"; then
 			patterns+=("$argument")
-			mapfile -t matches < <(expand_glob "$argument" "$expansion_options" | LC_ALL=C sort)
+			engine_output=$(expand_with_engine "$argument" "$ignore_case" "$engine_dotglob")
+			engine_status=$?
+			(( engine_status == 0 )) || return "$engine_status"
+			matches=()
+			if [[ -n "$engine_output" ]]; then
+				mapfile -t matches < <(printf '%s\n' "$engine_output" | LC_ALL=C sort)
+			fi
 			if (( ${#matches[@]} > 0 )); then
 				found=true
 				processed+=("${matches[@]}")
@@ -355,7 +374,13 @@ glob_main() {
 		for pattern in "${patterns[@]}"; do
 			basename=${pattern##*/}
 			[[ "$basename" == .* ]] && continue
-			mapfile -t matches < <(expand_glob "$pattern" "$expansion_options dotglob")
+			engine_output=$(expand_with_engine "$pattern" "$ignore_case" true)
+			engine_status=$?
+			(( engine_status == 0 )) || return "$engine_status"
+			matches=()
+			if [[ -n "$engine_output" ]]; then
+				mapfile -t matches <<<"$engine_output"
+			fi
 			for member in "${matches[@]}"; do
 				[[ ${member##*/} == .* ]] && warning=true && break 2
 			done

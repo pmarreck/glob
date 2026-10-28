@@ -33,7 +33,6 @@ touch "$TEST_DIR/alpha.txt" "$TEST_DIR/beta.txt" "$TEST_DIR/gamma.log"
 touch "$TEST_DIR/.hidden_alpha"
 
 GLOB="${GLOB_BIN:-$repo_root/bin/glob}"
-GLOB_HELPER="${GLOB_HELPER:-$repo_root/src/expand_glob.bash}"
 
 # Test 1: glob expands a pattern when invoked from a parent shell that has
 # compgen disabled. This is the parent-shell case (parent runs glob, parent's
@@ -86,28 +85,17 @@ else
 	((fails++))
 fi
 
-# Test 3: glob preserves caller's noglob state regardless of what it was
+# Test 3: the shared globlike engine remains available under stripped Bash
 ((tests++))
-echo "Testing: glob doesn't leak set +f / nullglob into caller's shell..."
-# Source glob's helper directly and confirm options are restored.
-# (This is a more direct test of the helper's state isolation property.)
-state_before=$(GLOB_HELPER="$GLOB_HELPER" bash -c '
-	set -f
-	source "$GLOB_HELPER"
-	echo "set:$-"
-	if shopt -q nullglob; then echo "nullglob:on"; else echo "nullglob:off"; fi
-	expand_glob "/tmp/*" >/dev/null 2>&1 || true
-	echo "after-set:$-"
-	if shopt -q nullglob; then echo "after-nullglob:on"; else echo "after-nullglob:off"; fi
-' 2>&1)
-
-# If expand_glob exists and properly isolates state, set -f survives and
-# nullglob stays off.
-if [[ "$state_before" == *"after-set:"*"f"* ]] && [[ "$state_before" == *"after-nullglob:off"* ]]; then
-	echo "✓ Test passed: expand_glob isolates state changes via subshell"
+echo "Testing: inline regex works under a bash with compgen disabled..."
+touch "$TEST_DIR/code-2024.asset" "$TEST_DIR/code-abcd.asset"
+result=$(BASH_ENV="$DISABLE_COMPGEN_FILE" "$GLOB" "$TEST_DIR/code-%r{[0-9]{4}}.asset" 2>&1)
+exit_code=$?
+if [[ $exit_code -eq 0 && "$result" == "$TEST_DIR/code-2024.asset" ]]; then
+	echo "✓ Test passed: globlike engine works without compgen builtin"
 else
-	echo "✗ Test failed: expand_glob leaked state into caller" >&2
-	echo "  output: $state_before" >&2
+	echo "✗ Test failed: globlike engine errored under stripped Bash" >&2
+	echo "  exit_code=$exit_code, output: $result" >&2
 	((fails++))
 fi
 
