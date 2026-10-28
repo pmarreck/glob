@@ -25,3 +25,9 @@ Completed work retired from `PLAN.md`.
   - Retry checkpoint: `ff621ea` was claimed, then its GitHub flake prefetch hung in `CLOSE-WAIT`. A worker restart exhausted its stop timeout, and redelivering the same signed push was correctly deduplicated. This content commit creates the fresh signed push event for exact-SHA verification.
   - Curiosity poke: the global worker queue may delay this repo behind unrelated builds.
 - [x] [CI onboarding incident] Mechatron Prime bounded source prefetch at 60 seconds, made signal recovery interrupt the in-flight child, added `claim.json` orphan recovery, and tested exactly-once requeue (`9bcfce50e100`; done 2026-09-28 23:26 EDT).
+
+## Retired 2026-10-28
+
+- [x] [Globlike engine migration] Add a Nix-built filesystem adapter that pins and invokes `globlike` as the sole matcher while preserving current CLI behavior (completed 2026-10-28; context: intents/globlike-engine.md).
+- [x] [Globlike engine migration] Preserve the characterized extended-glob contract in `globlike` and pin its tested commit without a local grammar fork (completed 2026-10-28 at globlike `5976ebd`; context: intents/globlike-engine.md).
+- [x] [Globlike engine migration] Remove the Bash matching helper after source-tree and packaged regression suites pass, then publish and verify the exact commit (completed 2026-10-28; `e8876e1` passed both Mechatron targets in 3 seconds; context: intents/globlike-engine.md).
