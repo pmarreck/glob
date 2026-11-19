@@ -6,7 +6,8 @@
 patterns to print deterministic matches, or put a command first to expand
 patterns into that command's argument list. Its sole matching engine is
 [`globlike`](https://github.com/pmarreck/globlike); this project supplies the
-filesystem traversal, command execution, and output-format adapters around it.
+filesystem traversal, command execution, and output-format adapters around it
+in one native executable.
 
 ```console
 $ set -f
@@ -66,10 +67,12 @@ Install into a Nix profile:
 nix profile install github:pmarreck/glob
 ```
 
-For development, `nix develop` supplies Bash, Zig, LuaJIT, and ShellCheck. The
-runtime package contains the Bash command and a Zig filesystem adapter linked
-to the separately pinned `globlike` source. It does not depend on Peter's
-dotfiles, and it does not carry a second glob parser or translator.
+For development, `nix develop` supplies Bash, Zig, LuaJIT, and ShellCheck. Nix
+is the reproducible build environment, not a runtime dependency: the Linux
+package is a static native executable with `globlike` and PCRE2 linked into it.
+It needs no Bash wrapper, sidecar engine, Nix installation, or `/nix/store`
+path to expand patterns. It does not depend on Peter's dotfiles or carry a
+second glob parser or translator.
 
 ## Usage
 
@@ -88,7 +91,7 @@ Options:
 - `-n`: emit shell-escaped results separated by spaces.
 - `-0`: emit NUL-separated results.
 - `-h`, `--help`: show command help.
-- `--about`: show version, runtime operating system, and architecture.
+- `--about`: show version and immutable compiled platform/ABI identity.
 
 Patterns support `*`, `?`, bracket expressions, `**`, `%r{...}` inline regex
 excerpts, quoted brace expansion, and extended globs such as
@@ -96,6 +99,10 @@ excerpts, quoted brace expansion, and extended globs such as
 remains a CLI adapter concern. Non-matching patterns are omitted. Direct mode
 exits 1 if nothing matches. Command mode preserves the caller's argument order
 while sorting each pattern's matches with `LC_ALL=C`.
+
+Hidden-file behavior is controlled explicitly with `--dotglob`, `--dotfiles`,
+or `--all`; private option state in a parent Bash process is intentionally not
+part of a native executable's interface.
 
 Paths containing newline characters are not supported. Use `-0` when ordinary
 whitespace or shell punctuation makes newline-separated output inconvenient.
@@ -107,11 +114,13 @@ explicitly selecting fields from line-oriented output.
 
 ```console
 ./test          # isolated CLI characterization suite
-./build         # Nix package
+./build         # Nix package and publish the native host command
 ./build --test  # every Nix flake check
 ```
 
-The standalone suite was ported before the implementation. It covers pattern
+The standalone suite was ported before the implementation. It runs the exact
+packaged executable, checks Linux static linkage and absence of Nix-store
+references, and covers pattern
 sets, command ordering, recursive and extended patterns, hidden files, case
 folding, all output formats, dry runs, help, and the absence of a `compgen`
 dependency.

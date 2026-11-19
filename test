@@ -5,21 +5,19 @@ set -u
 repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 failures=0
 
-if [[ -z ${GLOB_ENGINE:-} ]]; then
-	engine_out=$(nix build "$repo_root#engine" --no-link --print-out-paths)
+if [[ -z ${GLOB_BIN:-} ]]; then
+	package_out=$(nix build "$repo_root#default" --no-link --print-out-paths)
 	status=$?
-	if (( status != 0 )) || [[ -z "$engine_out" ]]; then
-		printf 'test: failed to prepare glob-engine through Nix\n' >&2
+	if (( status != 0 )) || [[ -z "$package_out" ]]; then
+		printf 'test: failed to prepare the packaged glob executable through Nix\n' >&2
 		exit 1
 	fi
-	GLOB_ENGINE="$engine_out/bin/glob-engine"
-	export GLOB_ENGINE
+	GLOB_BIN="$package_out/bin/glob"
+	export GLOB_BIN
 fi
 
-if [[ -n ${GLOB_BIN:-} ]]; then
-	PATH="${GLOB_BIN%/*}:$PATH"
-	export PATH
-fi
+PATH="${GLOB_BIN%/*}:$PATH"
+export PATH
 
 run_suite() {
 	local suite=$1
@@ -31,6 +29,7 @@ run_suite() {
 }
 
 run_suite "$repo_root/tests/cli/glob_test"
+run_suite "$repo_root/tests/cli/static_binary_test"
 run_suite "$repo_root/tests/compat/dotfiles_glob_test"
 run_suite "$repo_root/tests/compat/dotfiles_no_compgen_test"
 

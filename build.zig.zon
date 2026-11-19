@@ -1,7 +1,7 @@
 .{
 	.name = .glob,
 	.fingerprint = 0x87a155fef0426c32,
-	.version = "0.2.0",
+	.version = "0.3.0",
 	.minimum_zig_version = "0.16.0",
 	.dependencies = .{
 		.globlike = .{

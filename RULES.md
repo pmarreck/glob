@@ -7,6 +7,8 @@
 - Keep the standalone package independent of Peter's dotfiles.
 - Use pinned `globlike` as the sole pattern-matching engine; do not duplicate its
   parser or translator in this repository.
+- Build one native `glob` executable; do not require Bash, a sidecar engine,
+  Nix, or a Nix-store path at runtime.
 - Run `./test` and `./build` before every commit.
 - Do not claim that early Unix users normally invoked `/etc/glob` explicitly.
 - Do not implement `group_with_count` without a separate, explicit decision.

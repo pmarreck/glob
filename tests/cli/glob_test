@@ -119,7 +119,7 @@ check_result 'inline regex is matched by the shared globlike engine' 0 'photo-20
 
 run 'photo-%r{['
 check_result 'invalid shared patterns return a precise diagnostic' 2 '' \
-	'glob-engine: invalid pattern at byte 6: unclosed regex excerpt'
+	'glob: invalid pattern at byte 6: unclosed regex excerpt'
 
 run -n '*.txt'
 check_result '-n emits shell-escaped space-separated output' 0 'alpha.txt beta.txt file\ with\ spaces.txt ' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
@@ -150,14 +150,20 @@ check_result 'expansion does not depend on compgen' 0 'image.png' ''
 run --help
 check_contains 'help documents controlled expansion' 0 'glob: A utility for controlled glob expansion' ''
 
-run --about
-check_contains '--about reports one line with version and runtime platform' 0 'glob ' ''
+run_env OS=spoofed ARCH=spoofed "$glob_bin" --about
+check_contains '--about reports one line with version and compiled platform' 0 'glob ' ''
 tests=$((tests + 1))
 about_lines=$(wc -l <"$stdout_file" | tr -d ' ')
-if [[ "$status" == 0 && "$about_lines" == 1 && "$(cat "$stdout_file")" == *"$(uname -s)"* && "$(cat "$stdout_file")" == *"$(uname -m)"* && ! -s "$stderr_file" ]]; then
-	pass '--about includes OS and architecture'
+case $(uname -s):$(uname -m) in
+	Linux:x86_64) expected_platform='PF=linux-amd64 VARIANT=' ;;
+	Linux:aarch64) expected_platform='PF=linux-arm64 VARIANT=' ;;
+	Darwin:arm64) expected_platform='PF=macos-arm64' ;;
+	*) expected_platform='PF=unsupported' ;;
+esac
+if [[ "$status" == 0 && "$about_lines" == 1 && "$(cat "$stdout_file")" == *"$expected_platform"* && "$(cat "$stdout_file")" != *spoofed* && ! -s "$stderr_file" ]]; then
+	pass '--about reports immutable compiled-target identity'
 else
-	fail '--about includes OS and architecture' "status=$status lines=$about_lines stdout=$(cat "$stdout_file") stderr=$(cat "$stderr_file")"
+	fail '--about reports immutable compiled-target identity' "status=$status lines=$about_lines stdout=$(cat "$stdout_file") stderr=$(cat "$stderr_file")"
 fi
 
 if (( failures == 0 )); then

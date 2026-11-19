@@ -5,9 +5,52 @@ set -u
 repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}" && pwd)
 cd "$repo_root" || exit 1
 
+platform_family() {
+	local os arch
+	os=$(uname -s)
+	arch=$(uname -m)
+	case $os in
+		Linux) os=linux ;;
+		Darwin) os=macos ;;
+		*) printf 'build: unsupported host operating system: %s\n' "$os" >&2; return 1 ;;
+	esac
+	case $arch in
+		x86_64|amd64) arch=amd64 ;;
+		aarch64|arm64) arch=arm64 ;;
+		*) printf 'build: unsupported host architecture: %s\n' "$arch" >&2; return 1 ;;
+	esac
+	printf '%s-%s\n' "$os" "$arch"
+}
+
+publish_host() {
+	local pf output_link target native_dir native_link generic_link references
+	pf=$(platform_family) || return
+	output_link="$repo_root/.nix-out/$pf/ReleaseFast"
+	nix build .#default --out-link "$output_link" --print-build-logs || return
+	target="$output_link/bin/glob"
+	if [[ ! -x "$target" ]]; then
+		printf 'build: package did not produce executable %s\n' "$target" >&2
+		return 1
+	fi
+	references=$(nix-store -q --references "$output_link") || return
+	if [[ -n "$references" ]]; then
+		printf 'build: glob has runtime Nix-store references:\n%s\n' "$references" >&2
+		return 1
+	fi
+	native_dir="$repo_root/bin/$pf"
+	mkdir -p "$native_dir"
+	native_link="$native_dir/.glob.$$.tmp"
+	generic_link="$repo_root/bin/.glob.$$.tmp"
+	ln -s "../../.nix-out/$pf/ReleaseFast/bin/glob" "$native_link" || return
+	ln -s "$pf/glob" "$generic_link" || return
+	mv -f "$native_link" "$native_dir/glob"
+	mv -f "$generic_link" "$repo_root/bin/glob"
+	"$repo_root/bin/glob" --about
+}
+
 case ${1:-} in
 	'')
-		nix build .#default --print-build-logs
+		publish_host
 		;;
 	--test)
 		nix flake check --print-build-logs

@@ -3,7 +3,8 @@
 set -u
 
 repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/../.." && pwd)
-PATH="$repo_root/bin:$PATH"
+expected_glob=${GLOB_BIN:-$repo_root/bin/glob}
+PATH="${expected_glob%/*}:$PATH"
 
 assert() {
   local actual=$1 operator=$2 expected=$3 description=$4
@@ -33,6 +34,10 @@ test_glob() {
   local glob_path
 
   glob_path=$(command -v glob)
+  if [[ $(readlink -f "$glob_path") != $(readlink -f "$expected_glob") ]]; then
+    printf 'not ok - test resolved stale glob: %s (expected %s)\n' "$glob_path" "$expected_glob" >&2
+    return 1
+  fi
 
   # Detect filesystem case-sensitivity at runtime
   local _cs_probe
@@ -152,7 +157,7 @@ test_glob() {
   touch aafirst.jpg
   # Test with ls command and nullglob enabled
   # When nullglob is set, non-matching patterns should be removed completely
-  output=$(bash -O nullglob "$glob_path" ls "nonexistent*.jpg" "a*.jpg" 2>/dev/null)
+  output=$(bash -O nullglob -c 'exec "$@"' _ "$glob_path" ls "nonexistent*.jpg" "a*.jpg" 2>/dev/null)
   # Should only include aafirst.jpg, not the nonexistent pattern
   expected_files="aafirst.jpg"
   assert "$output" == "$expected_files" "glob should respect nullglob setting (enabled)"
@@ -160,18 +165,17 @@ test_glob() {
   # Clean up test file
   rm -f aafirst.jpg
 
-  # Test 11: Respect dotglob setting (when dotglob is set, hidden files are included)
+  # Test 11: Parent-shell dotglob state does not leak into the native executable.
   (( tests++ ))
   # Create test files including a hidden file
   touch ".hidden.jpg" aafirst.jpg "test with spaces.jpg" test1.jpg test2.jpg zzlast.jpg
 
-  output=$(bash -O dotglob "$glob_path" "*.jpg" 2>/dev/null)
-  # Should include the hidden file
-  expected_files=$'.hidden.jpg\naafirst.jpg\ntest with spaces.jpg\ntest1.jpg\ntest2.jpg\nzzlast.jpg'
-  assert "$output" == "$expected_files" "glob should respect dotglob setting (enabled)"
+  output=$(bash -O dotglob -c 'exec "$@"' _ "$glob_path" "*.jpg" 2>/dev/null)
+  expected_files=$'aafirst.jpg\ntest with spaces.jpg\ntest1.jpg\ntest2.jpg\nzzlast.jpg'
+  assert "$output" == "$expected_files" "glob should require its explicit dotglob flag"
   (( fails += $? ))
 
-  output=$(bash "$glob_path" "*.jpg" 2>/dev/null)
+  output=$("$glob_path" "*.jpg" 2>/dev/null)
   # Should NOT include the hidden file
   expected_files=$'aafirst.jpg\ntest with spaces.jpg\ntest1.jpg\ntest2.jpg\nzzlast.jpg'
   assert "$output" == "$expected_files" "glob should respect dotglob setting (disabled)"
@@ -183,7 +187,7 @@ test_glob() {
   # Test 12: --dotglob includes dotfiles even when dotglob is disabled
   (( tests++ ))
   touch ".hidden.par2"
-  output=$(bash "$glob_path" --dotglob "**/*.par2" 2>/dev/null)
+  output=$("$glob_path" --dotglob "**/*.par2" 2>/dev/null)
   expected_files=".hidden.par2"
   assert "$output" == "$expected_files" "glob --dotglob should include dotfiles even when dotglob is disabled"
   (( fails += $? ))
@@ -192,7 +196,7 @@ test_glob() {
   # Test 13: --dotfiles is a synonym for --dotglob
   (( tests++ ))
   touch ".hidden.par2"
-  output=$(bash "$glob_path" --dotfiles "**/*.par2" 2>/dev/null)
+  output=$("$glob_path" --dotfiles "**/*.par2" 2>/dev/null)
   expected_files=".hidden.par2"
   assert "$output" == "$expected_files" "glob --dotfiles should include dotfiles like --dotglob"
   (( fails += $? ))
@@ -201,7 +205,7 @@ test_glob() {
   # Test 14: --all includes dotfiles even when dotglob is disabled
   (( tests++ ))
   touch ".hidden1.par2" ".hidden2.par2"
-  output=$(bash "$glob_path" --all "**/*.par2" 2>/dev/null)
+  output=$("$glob_path" --all "**/*.par2" 2>/dev/null)
   expected_files=$'.hidden1.par2\n.hidden2.par2'
   assert "$output" == "$expected_files" "glob --all should include dotfiles even when dotglob is disabled"
   (( fails += $? ))
@@ -264,7 +268,7 @@ test_glob() {
   (( tests++ ))
   # Test with a non-matching recursive pattern and command mode
   # When nullglob is set, non-matching patterns should be removed completely
-  output=$(bash -O nullglob "$glob_path" ls "**/nonexistent*.jpg" 2>/dev/null)
+  output=$(bash -O nullglob -c 'exec "$@"' _ "$glob_path" ls "**/nonexistent*.jpg" 2>/dev/null)
   # Should be empty with nullglob
   expected_files=""
   assert "$output" == "$expected_files" "glob should respect nullglob with recursive patterns"

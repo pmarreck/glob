@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 
-# Test that bin/glob works without depending on the compgen builtin.
+# Test that the native glob command is independent of the invoking Bash.
 #
-# Background: Nix's pkgs.bash is a stripped build without programmable
-# completion (no compgen, no complete). It gets injected onto PATH by any
-# Nix devshell via stdenv. When glob's #!/usr/bin/env bash shebang resolves
-# to that minimal bash, calls to `compgen -G` fail with "command not found".
-#
-# This test simulates that environment by running glob under a bash with
-# compgen explicitly disabled (`enable -n compgen`). If glob still expands
-# patterns correctly, it's not depending on compgen.
+# This preserves the original regression scenario: Nix can supply a stripped
+# Bash without programmable completion. A native glob must behave identically
+# even when its parent Bash has compgen disabled and BASH_ENV is hostile.
 
 set -u
 
@@ -35,11 +30,7 @@ touch "$TEST_DIR/.hidden_alpha"
 GLOB="${GLOB_BIN:-$repo_root/bin/glob}"
 
 # Test 1: glob expands a pattern when invoked from a parent shell that has
-# compgen disabled. This is the parent-shell case (parent runs glob, parent's
-# state is irrelevant because glob is a subprocess).
-# But more importantly: test that glob ITSELF doesn't crash if its own bash
-# happens to lack compgen. We simulate this by re-execing glob through a
-# wrapper that disables compgen via BASH_ENV.
+# compgen disabled. BASH_ENV must not affect the native subprocess.
 ((tests++))
 echo "Testing: glob works under a bash with compgen disabled..."
 
@@ -49,11 +40,10 @@ cat > "$DISABLE_COMPGEN_FILE" <<'EOF'
 enable -n compgen 2>/dev/null
 EOF
 
-# Run glob with BASH_ENV pointing to that file — every non-interactive bash
-# subprocess (including glob's own shebang invocation) will source it and
-# end up without compgen as a builtin.
+# Run glob with BASH_ENV pointing to that file. Any accidental Bash wrapper
+# would source it; the native executable must not.
 # NOTE: quote the pattern so the test shell doesn't pre-expand it — we want
-# glob's own code path to do the expansion (that's the path that hits compgen).
+# glob's own code path to do the expansion.
 result=$(BASH_ENV="$DISABLE_COMPGEN_FILE" "$GLOB" ls "$TEST_DIR/*.txt" 2>&1)
 exit_code=$?
 

@@ -13,14 +13,14 @@ including Peter's shell workflow with automatic expansion disabled.
   caller's argument order.
 - Preserve the characterized behavior of Peter's original dotfiles utility in
   a standalone package.
-- Keep installation and testing reproducible through Nix.
+- Keep builds and testing reproducible through Nix without making Nix a runtime dependency.
 - Use the separately maintained `globlike` library as the sole pattern-matching
   engine; keep filesystem traversal, command execution, and presentation in this
   CLI's adapters.
 
 ## Scope and non-goals
 
-The project is a Bash 4+ command for Unix-like systems. It supports direct and
+The project is a native command for Unix-like systems. It supports direct and
 command modes, the documented output formats, hidden-file and case controls,
 recursive patterns, brace expansion, and extended globs.
 
@@ -37,14 +37,16 @@ library.
 - Preserve the characterized CLI behavior and exit codes.
 - Keep expansion independent of Bash programmable completion (`compgen`).
 - Keep output ordering independent of the caller's locale.
+- Ship one native `glob` executable with `globlike` and its non-system runtime dependencies linked into it; ordinary use must not require Bash, a sidecar engine, Nix, or `/nix/store`.
 - Keep the explicit-globbing argument framed as Peter's design opinion, without
   claiming that early Unix users normally invoked `/etc/glob` themselves.
 
 ## Success evidence
 
 Success requires the complete `./test` suite and `./build` to pass, the Nix
-package to run its own installed tests inside the sandbox, and the selected
-flake targets to pass at the exact published commit in Mechatron Prime.
+package to run its own installed tests inside the sandbox, Linux checks to prove
+the executable has no dynamic loader or shared-library dependency, and the
+selected flake targets to pass at the exact published commit in Mechatron Prime.
 
 See [TERMINOLOGY.md](TERMINOLOGY.md) for project terms, [PLAN.md](PLAN.md) for
 active work, and [README.md](README.md) for the user-facing interface and

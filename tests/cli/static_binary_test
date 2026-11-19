@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+set -u
+
+repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/../.." && pwd)
+glob_bin=${GLOB_BIN:-$repo_root/bin/glob}
+failures=0
+tests=0
+
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/glob-static-test.XXXXXX") || exit 1
+trap 'case "$scratch" in "${TMPDIR:-/tmp}"/glob-static-test.*) rm -rf -- "$scratch";; esac' EXIT
+touch "$scratch/alpha.txt" "$scratch/beta.txt"
+
+pass() { printf 'ok %d - %s\n' "$tests" "$1"; }
+fail() {
+	printf 'not ok %d - %s\n' "$tests" "$1" >&2
+	shift
+	printf '  %s\n' "$@" >&2
+	failures=$((failures + 1))
+}
+
+tests=$((tests + 1))
+magic=$(od -An -tx1 -N4 "$glob_bin" | tr -d ' \n')
+if [[ "$magic" == 7f454c46 || "$magic" == cffaedfe || "$magic" == feedfacf ]]; then
+	pass 'glob is a native executable rather than an interpreter script'
+else
+	fail 'glob is a native executable rather than an interpreter script' "magic=$magic"
+fi
+
+tests=$((tests + 1))
+output=$(cd "$scratch" && env -u GLOB_ENGINE PATH=/definitely-empty "$glob_bin" '*.txt' 2>&1)
+status=$?
+if [[ "$status" == 0 && "$output" == $'alpha.txt\nbeta.txt' ]]; then
+	pass 'glob expands paths without a sidecar engine or runtime PATH tools'
+else
+	fail 'glob expands paths without a sidecar engine or runtime PATH tools' "status=$status output=<$output>"
+fi
+
+if [[ $(uname -s) == Linux ]]; then
+	tests=$((tests + 1))
+	program_headers=$(readelf -lW "$glob_bin" 2>&1)
+	program_status=$?
+	dynamic_section=$(readelf -dW "$glob_bin" 2>&1)
+	dynamic_status=$?
+	if [[ "$program_status" == 0 && "$dynamic_status" == 0 && "$program_headers" != *INTERP* && "$dynamic_section" != *NEEDED* ]]; then
+		pass 'Linux glob has no dynamic loader or shared-library dependency'
+	else
+		fail 'Linux glob has no dynamic loader or shared-library dependency' \
+			"readelf statuses=$program_status/$dynamic_status or reported an INTERP/NEEDED entry"
+	fi
+fi
+
+tests=$((tests + 1))
+if grep -aF '/nix/store/' "$glob_bin" >/dev/null; then
+	fail 'glob embeds no Nix store path' 'binary contains a /nix/store reference'
+else
+	pass 'glob embeds no Nix store path'
+fi
+
+if (( failures == 0 )); then
+	printf '1..%d\n' "$tests"
+else
+	printf '1..%d\n%d static-binary test(s) failed.\n' "$tests" "$failures" >&2
+fi
+
+exit "$failures"

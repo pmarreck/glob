@@ -1,2 +1,6 @@
 /result
 /.direnv
+/zig-pkg
+/.nix-out
+/bin/*/glob
+/bin/glob
