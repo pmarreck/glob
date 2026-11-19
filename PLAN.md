@@ -2,6 +2,10 @@
 
 See [completed history](docs/PLAN_LOG.md), [project intent](INTENT.md), and [terminology](TERMINOLOGY.md).
 
+## Bounded directory traversal
+
+- [x] Reproduce the slow single-component glob, bound traversal to the pattern's possible depth/root, and enforce the work bound with independent directory syscall traces. (context: docs/traversal-performance.md; done 2026-11-19 11:10 EST; commit: this commit)
+
 ## Standalone native executable
 
 - [x] Port the characterized CLI adapter into the Zig executable and retire the Bash wrapper, sidecar engine, `GLOB_ENGINE`, and ambient Bash-option inheritance. (done 2026-11-19 10:33 EST; commit: this commit)

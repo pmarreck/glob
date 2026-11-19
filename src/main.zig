@@ -124,6 +124,7 @@ pub fn main(init: std.process.Init) !u8 {
 	}
 
 	var found = false;
+	var excluded_dotfile = false;
 	var patterns: std.ArrayListUnmanaged([]const u8) = .empty;
 	var processed: std.ArrayListUnmanaged([]const u8) = .empty;
 	for (expanded_args.items) |arg| {
@@ -133,7 +134,9 @@ pub fn main(init: std.process.Init) !u8 {
 		}
 		if (isPattern(arg)) {
 			try patterns.append(init.arena.allocator(), arg);
-			const matches = expandPattern(init, arg, options.ignore_case, options.include_dotfiles) catch return 2;
+			const expansion = expandPattern(init, arg, options.ignore_case, options.include_dotfiles) catch return 2;
+			const matches = expansion.matches;
+			excluded_dotfile = excluded_dotfile or expansion.excluded_dotfile;
 			std.mem.sort([]const u8, matches.items, {}, lessThanString);
 			if (matches.items.len > 0) {
 				found = true;
@@ -145,10 +148,8 @@ pub fn main(init: std.process.Init) !u8 {
 		}
 	}
 
-	if (!options.include_dotfiles and !brace_was_expanded and patterns.items.len > 0) {
-		if (try excludedDotfileMatched(init, patterns.items, options.ignore_case)) {
-			try stderr(init, "\x1b[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\x1b[0m\n");
-		}
+	if (!options.include_dotfiles and !brace_was_expanded and excluded_dotfile) {
+		try stderr(init, "\x1b[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\x1b[0m\n");
 	}
 
 	if (!found) {
@@ -256,7 +257,12 @@ fn executableFile(init: std.process.Init, path: []const u8) bool {
 	return stat.kind != .directory;
 }
 
-fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: bool, dotglob: bool) !std.ArrayListUnmanaged([]const u8) {
+const Expansion = struct {
+	matches: std.ArrayListUnmanaged([]const u8) = .empty,
+	excluded_dotfile: bool = false,
+};
+
+fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: bool, dotglob: bool) !Expansion {
 	const compiled = try globlike.compile(init.gpa, source, .{ .case_insensitive = case_insensitive });
 	var pattern = switch (compiled) {
 		.diagnostic => |diagnostic| {
@@ -267,55 +273,53 @@ fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: b
 	};
 	defer pattern.deinit();
 
-	const absolute_root = absoluteTraversalRoot(source);
-	const root_path = absolute_root orelse ".";
-	var directory = (if (absolute_root != null)
-		std.Io.Dir.openDirAbsolute(init.io, root_path, .{ .iterate = true })
+	const plan = traversalPlan(source, case_insensitive);
+	var directory = (if (std.fs.path.isAbsolute(plan.root))
+		std.Io.Dir.openDirAbsolute(init.io, plan.root, .{ .iterate = true })
 	else
-		std.Io.Dir.cwd().openDir(init.io, root_path, .{ .iterate = true })) catch |err| {
+		std.Io.Dir.cwd().openDir(init.io, plan.root, .{ .iterate = true })) catch |err| {
+		if (err == error.FileNotFound or err == error.NotDir) return .{};
 		try reportError(init, "cannot open traversal root", err);
 		return error.TraversalFailed;
 	};
 	defer directory.close(init.io);
-	var walker = try directory.walk(init.gpa);
+	var walker = try directory.walkSelectively(init.gpa);
 	defer walker.deinit();
 
-	var matches: std.ArrayListUnmanaged([]const u8) = .empty;
-	const explicit_current = std.mem.startsWith(u8, source, "./");
+	var expansion: Expansion = .{};
+	var candidate_buffer: std.ArrayListUnmanaged(u8) = .empty;
+	defer candidate_buffer.deinit(init.gpa);
 	while (walker.next(init.io) catch |err| {
 		try reportError(init, "cannot traverse directory", err);
 		return error.TraversalFailed;
 	}) |entry| {
+		// A wildcard without recursive syntax cannot consume extra path components.
+		// Enter before matching so unmatched directories can still contain matches.
+		if (entry.kind == .directory and (plan.max_depth == null or entry.depth() < plan.max_depth.?)) {
+			walker.enter(init.io, entry) catch |err| {
+				try reportError(init, "cannot traverse directory", err);
+				return error.TraversalFailed;
+			};
+		}
 		if (std.mem.indexOfScalar(u8, entry.path, '\n') != null) continue;
-		const candidate = if (absolute_root) |root|
-			if (std.mem.eql(u8, root, "/"))
-				try std.fmt.allocPrint(init.arena.allocator(), "/{s}", .{entry.path})
-			else
-				try std.fmt.allocPrint(init.arena.allocator(), "{s}/{s}", .{ root, entry.path })
-		else if (explicit_current)
-			try std.fmt.allocPrint(init.arena.allocator(), "./{s}", .{entry.path})
-		else
-			try init.arena.allocator().dupe(u8, entry.path);
-		if (!dotglob and !dotPathAllowed(source, candidate)) continue;
+		candidate_buffer.clearRetainingCapacity();
+		try candidate_buffer.appendSlice(init.gpa, plan.prefix);
+		if (plan.prefix.len > 0 and plan.prefix[plan.prefix.len - 1] != '/') try candidate_buffer.append(init.gpa, '/');
+		try candidate_buffer.appendSlice(init.gpa, entry.path);
+		const candidate = candidate_buffer.items;
 		switch (pattern.matches(candidate)) {
-			.matched => |matched| if (matched) try matches.append(init.arena.allocator(), candidate),
+			.matched => |matched| if (matched) {
+				// Preserve the dotfile advisory without compiling and walking twice.
+				if (!std.mem.startsWith(u8, std.fs.path.basename(source), ".") and std.mem.startsWith(u8, entry.basename, ".")) expansion.excluded_dotfile = true;
+				if (dotglob or dotPathAllowed(source, candidate)) try expansion.matches.append(init.arena.allocator(), try init.arena.allocator().dupe(u8, candidate));
+			},
 			.diagnostic => |diagnostic| {
 				try reportDiagnostic(init, "matching failed", diagnostic);
 				return error.InvalidPattern;
 			},
 		}
 	}
-	return matches;
-}
-
-fn excludedDotfileMatched(init: std.process.Init, patterns: []const []const u8, case_insensitive: bool) !bool {
-	for (patterns) |pattern| {
-		const basename = std.fs.path.basename(pattern);
-		if (std.mem.startsWith(u8, basename, ".")) continue;
-		const matches = expandPattern(init, pattern, case_insensitive, true) catch return false;
-		for (matches.items) |member| if (std.mem.startsWith(u8, std.fs.path.basename(member), ".")) return true;
-	}
-	return false;
+	return expansion;
 }
 
 fn writeResults(init: std.process.Init, items: []const []const u8, format: OutputFormat) !void {
@@ -515,15 +519,26 @@ fn hasHiddenComponent(path: []const u8) bool {
 	return false;
 }
 
-fn absoluteTraversalRoot(pattern: []const u8) ?[]const u8 {
-	if (pattern.len == 0 or pattern[0] != '/') return null;
-	var special = pattern.len;
-	for (pattern, 0..) |byte, index| {
-		if (byte == '*' or byte == '?' or byte == '[' or byte == '%' or byte == '{') {
-			special = index;
-			break;
-		}
-	}
-	const slash = std.mem.lastIndexOfScalar(u8, pattern[0..special], '/') orelse return "/";
-	return if (slash == 0) "/" else pattern[0..slash];
+const TraversalPlan = struct { root: []const u8, prefix: []const u8, max_depth: ?usize };
+
+fn traversalPlan(source: []const u8, case_insensitive: bool) TraversalPlan {
+	// This is a conservative filesystem work bound, never a second matcher.
+	// Regex fragments, globstar and extglob repetition may consume an
+	// unbounded number of separators; globlike still decides every match.
+	if (std.mem.startsWith(u8, source, "regex:")) return .{ .root = ".", .prefix = "", .max_depth = null };
+	const pattern = if (std.mem.startsWith(u8, source, "glob:")) source[5..] else source;
+	const special = std.mem.indexOfAny(u8, pattern, "*?[%{\\+@!(") orelse pattern.len;
+	const literal_end = if (case_insensitive) 0 else special;
+	const slash = std.mem.lastIndexOfScalar(u8, pattern[0..literal_end], '/');
+	const absolute = std.mem.startsWith(u8, pattern, "/");
+	const prefix = if (slash) |at| pattern[0..if (at == 0) 1 else at] else if (absolute) "/" else if (std.mem.startsWith(u8, pattern, "./")) "." else "";
+	const rest = if (prefix.len > 0) std.mem.trimStart(u8, pattern[prefix.len..], "/") else pattern;
+	const recursive = std.mem.indexOf(u8, pattern, "**") != null or
+		std.mem.indexOfScalar(u8, pattern, '%') != null or
+		(std.mem.indexOfScalar(u8, rest, '(') != null and std.mem.indexOfScalar(u8, rest, '/') != null);
+	return .{
+		.root = if (prefix.len == 0) "." else prefix,
+		.prefix = prefix,
+		.max_depth = if (recursive) null else std.mem.countScalar(u8, rest, '/') + 1,
+	};
 }

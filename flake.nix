@@ -63,7 +63,7 @@
 							platforms = systems;
 						};
 					};
-					testTools = [ pkgs.bash pkgs.coreutils pkgs.gnugrep ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils pkgs.glibc.bin ];
+					testTools = [ pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.gnused ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils pkgs.glibc.bin pkgs.strace ];
 					test = pkgs.stdenvNoCC.mkDerivation {
 						pname = "glob-tests";
 						version = "0.3.0";
@@ -75,7 +75,7 @@
 						GLOB_BIN = "${package}/bin/glob";
 						checkPhase = ''
 							runHook preCheck
-							patchShebangs test tests/cli/glob_test tests/cli/static_binary_test tests/compat/dotfiles_glob_test tests/compat/dotfiles_no_compgen_test
+							patchShebangs test tests/cli/glob_test tests/cli/static_binary_test tests/cli/traversal_test tests/compat/dotfiles_glob_test tests/compat/dotfiles_no_compgen_test
 							./test
 							${package}/bin/glob --about >/dev/null
 							runHook postCheck
@@ -98,7 +98,8 @@
 			checks = forAllSystems (system: let built = products system; in { build = built.package; test = built.test; });
 			devShells = forAllSystems (system: let pkgs = nixpkgs.legacyPackages.${system}; in {
 				default = pkgs.mkShell {
-					packages = [ pkgs.bashInteractive pkgs.luajit pkgs.shellcheck zig-overlay.packages.${system}."0.16.0" ];
+					packages = [ pkgs.bashInteractive pkgs.luajit pkgs.shellcheck zig-overlay.packages.${system}."0.16.0" ]
+						++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils pkgs.strace ];
 				};
 			});
 		};

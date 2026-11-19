@@ -125,4 +125,10 @@ sets, command ordering, recursive and extended patterns, hidden files, case
 folding, all output formats, dry runs, help, and the absence of a `compgen`
 dependency.
 
+Ordinary pathname globs scan only their possible path depth, starting at a
+literal directory prefix when one is available. `glob 'mecha*'` reads the
+current directory once without opening its descendants. Recursive patterns and
+regex excerpts retain recursive traversal. Linux tests inspect kernel directory
+syscalls to enforce that work bound; see [performance evidence](docs/traversal-performance.md).
+
 Licensed under the [MIT License](LICENSE).

@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+
+set -eu
+repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/../.." && pwd)
+glob_bin=${GLOB_BIN:-$repo_root/bin/glob}
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/glob-traversal.XXXXXX")
+trap 'cd "$repo_root"; case "$scratch" in "${TMPDIR:-/tmp}"/glob-traversal.*) rm -rf -- "$scratch";; esac' EXIT
+mkdir -p "$scratch/work/mecha-one/deep" "$scratch/work/other/deep/deep/deep" "$scratch/work/nested/deeper"
+touch "$scratch/work/mecha-two" "$scratch/work/nested/one.txt" "$scratch/work/nested/deeper/two.txt"
+touch "$scratch/work/other/deep/deep/deep/hit.asset"
+cd "$scratch/work"
+
+check() {
+	local pattern=$1 expected=$2 actual
+	actual=$("$glob_bin" "$pattern")
+	if [[ "$actual" != "$expected" ]]; then
+		printf 'FAIL traversal result for %s: <%s>, expected <%s>\n' "$pattern" "$actual" "$expected" >&2
+		exit 1
+	fi
+}
+
+check 'mecha*' $'mecha-one\nmecha-two'
+check 'nested/*.txt' 'nested/one.txt'
+check './nested/*.txt' './nested/one.txt'
+check "$scratch/work/nested/*.txt" "$scratch/work/nested/one.txt"
+check 'glob:nested/*.txt' 'nested/one.txt'
+check 'nested/**/*.txt' $'nested/deeper/two.txt\nnested/one.txt'
+check 'regex:nested/.*[.]txt' $'nested/deeper/two.txt\nnested/one.txt'
+check 'nested/%r{.*}[.]txt' $'nested/deeper/two.txt\nnested/one.txt'
+check '@(nested/one.txt|nested/deeper/two.txt)' $'nested/deeper/two.txt\nnested/one.txt'
+check 'other/+(deep/)hit.asset' 'other/deep/deep/deep/hit.asset'
+if [[ $("$glob_bin" -i 'NESTED/*.TXT') != 'nested/one.txt' ]]; then
+	printf 'FAIL case-insensitive literal directory prefix\n' >&2
+	exit 1
+fi
+if [[ $("$glob_bin" -i './NESTED/*.TXT') != './nested/one.txt' ]]; then
+	printf 'FAIL case-insensitive explicit current directory prefix\n' >&2
+	exit 1
+fi
+if "$glob_bin" 'missing-directory/*.txt' >"$scratch/output" 2>"$scratch/error"; then
+	printf 'FAIL absent literal directory unexpectedly matched\n' >&2
+	exit 1
+elif [[ $? != 1 ]]; then
+	printf 'FAIL absent literal directory must be a no-match\n' >&2
+	exit 1
+fi
+printf 'PASS traversal preserves bounded, recursive, regex, and extglob results\n'
+
+if [[ $(uname -s) != Linux ]]; then
+	printf 'Directory syscall gate requires Linux; portable result checks passed.\n'
+	exit 0
+fi
+
+# The kernel trace is the independent work oracle: adding descendants cannot
+# cause a one-component glob to enumerate them. No timing threshold or product
+# counter can conceal unnecessary traversal. strace is a declared check input.
+trace_check() {
+	local pattern=$1 allowed=$2 enumerated scans
+	strace -f -qq -yy -e trace=getdents64 -o "$scratch/trace" "$glob_bin" "$pattern" >"$scratch/output"
+	enumerated=$(sed -n 's/.*getdents64([0-9]*<\([^>]*\)>.*/\1/p' "$scratch/trace" | sort -u)
+	if [[ "$enumerated" != "$allowed" ]]; then
+		printf 'FAIL traversal work for %s\nEnumerated:\n%s\nExpected:\n%s\n' "$pattern" "$enumerated" "$allowed" >&2
+		exit 1
+	fi
+	scans=$(grep -c '= 0$' "$scratch/trace")
+	if [[ "$scans" != "$(printf '%s\n' "$allowed" | wc -l | tr -d ' ')" ]]; then
+		printf 'FAIL directories were scanned more than once for %s\n' "$pattern" >&2
+		exit 1
+	fi
+}
+
+trace_check 'mecha*' "$scratch/work"
+for i in {1..64}; do mkdir -p "other/deep/irrelevant-$i/leaf"; done
+trace_check 'mecha*' "$scratch/work"
+trace_check 'nested/*.txt' "$scratch/work/nested"
+trace_check "$scratch/work/nested/*.txt" "$scratch/work/nested"
+trace_check 'glob:nested/*.txt' "$scratch/work/nested"
+trace_check '@(mecha*|absent*)' "$scratch/work"
+trace_check '*/*.txt' "$scratch/work"$'\n'"$scratch/work/mecha-one"$'\n'"$scratch/work/nested"$'\n'"$scratch/work/other"
+printf 'PASS bounded globs enumerate only required directories, regardless of descendant count\n'
