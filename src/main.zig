@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const globlike = @import("globlike");
 const brace = @import("brace.zig");
+const ignore = @import("ignore.zig");
+const build_identity = @import("build_identity");
 
 const version = "0.3.0";
 
@@ -10,6 +12,8 @@ const OutputFormat = enum { newline, space, nul, double_quote };
 const Options = struct {
 	ignore_case: bool = false,
 	include_dotfiles: bool = false,
+	include_gitignored: bool = false,
+	mute: bool = false,
 	batch: bool = false,
 	dry_run: bool = false,
 	format: OutputFormat = .newline,
@@ -28,8 +32,10 @@ const help =
 	\\
 	\\OPTIONS:
 	\\  -i, --ignore-case                Case-insensitive pattern matching
-	\\  --dotglob, --dotfiles            Include dotfiles in matches
-	\\  --all                            No restrictions (includes dotfiles)
+	\\  --hidden, --dotglob, --dotfiles   Include hidden paths and directories
+	\\  --gitignore, --gitignored        Include paths excluded by .gitignore
+	\\  --all                            Include hidden and gitignored paths
+	\\  --mute                           Silence exclusion summaries (not errors)
 	\\  --batch                          Run a command in ARG_MAX-safe chunks
 	\\  --dry-run, --debug               Show the expanded command without running it
 	\\  --double-quote                   Double-quoted, newline-separated output
@@ -69,8 +75,15 @@ pub fn main(init: std.process.Init) !u8 {
 	for (raw.items) |arg| {
 		if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--ignore-case")) {
 			options.ignore_case = true;
-		} else if (std.mem.eql(u8, arg, "--dotglob") or std.mem.eql(u8, arg, "--dotfiles") or std.mem.eql(u8, arg, "--all")) {
+		} else if (std.mem.eql(u8, arg, "--dotglob") or std.mem.eql(u8, arg, "--dotfiles") or std.mem.eql(u8, arg, "--hidden")) {
 			options.include_dotfiles = true;
+		} else if (std.mem.eql(u8, arg, "--gitignore") or std.mem.eql(u8, arg, "--gitignored")) {
+			options.include_gitignored = true;
+		} else if (std.mem.eql(u8, arg, "--all")) {
+			options.include_dotfiles = true;
+			options.include_gitignored = true;
+		} else if (std.mem.eql(u8, arg, "--mute")) {
+			options.mute = true;
 		} else if (std.mem.eql(u8, arg, "--batch")) {
 			options.batch = true;
 		} else if (std.mem.eql(u8, arg, "--dry-run") or std.mem.eql(u8, arg, "--debug")) {
@@ -98,10 +111,8 @@ pub fn main(init: std.process.Init) !u8 {
 	}
 
 	var expanded_args: std.ArrayListUnmanaged([]const u8) = .empty;
-	var brace_was_expanded = false;
 	for (parsed.items) |arg| {
 		const expansion = try brace.expand(init.arena.allocator(), arg);
-		if (expansion.items.len > 1) brace_was_expanded = true;
 		try expanded_args.appendSlice(init.arena.allocator(), expansion.items);
 	}
 
@@ -124,7 +135,9 @@ pub fn main(init: std.process.Init) !u8 {
 	}
 
 	var found = false;
-	var excluded_dotfile = false;
+	var skipped: SkipSummary = .{};
+	var ignore_filter: ignore.Filter = .{};
+	defer ignore_filter.deinit();
 	var patterns: std.ArrayListUnmanaged([]const u8) = .empty;
 	var processed: std.ArrayListUnmanaged([]const u8) = .empty;
 	for (expanded_args.items) |arg| {
@@ -134,9 +147,11 @@ pub fn main(init: std.process.Init) !u8 {
 		}
 		if (isPattern(arg)) {
 			try patterns.append(init.arena.allocator(), arg);
-			const expansion = expandPattern(init, arg, options.ignore_case, options.include_dotfiles) catch return 2;
+			const expansion = expandPattern(init, arg, options, &ignore_filter, &skipped) catch |err| {
+				if (err != error.InvalidPattern and err != error.TraversalFailed) try reportError(init, "cannot apply exclusion rules", err);
+				return 2;
+			};
 			const matches = expansion.matches;
-			excluded_dotfile = excluded_dotfile or expansion.excluded_dotfile;
 			std.mem.sort([]const u8, matches.items, {}, lessThanString);
 			if (matches.items.len > 0) {
 				found = true;
@@ -146,10 +161,6 @@ pub fn main(init: std.process.Init) !u8 {
 			found = true;
 			try processed.append(init.arena.allocator(), arg);
 		}
-	}
-
-	if (!options.include_dotfiles and !brace_was_expanded and excluded_dotfile) {
-		try stderr(init, "\x1b[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\x1b[0m\n");
 	}
 
 	if (!found) {
@@ -163,6 +174,7 @@ pub fn main(init: std.process.Init) !u8 {
 		} else {
 			try stderr(init, "Error: No matches found\n");
 		}
+		if (!options.mute) try skipped.report(init);
 		return 1;
 	}
 
@@ -175,23 +187,32 @@ pub fn main(init: std.process.Init) !u8 {
 				try writeShellEscaped(init, std.Io.File.stderr(), arg);
 			}
 			try stderr(init, "\x1b[0m\n");
+			if (!options.mute) try skipped.report(init);
 			return 0;
 		}
-		if (options.batch) return runBatched(init, command, processed.items);
+		if (options.batch) {
+			const code = try runBatched(init, command, processed.items);
+			if (!options.mute) try skipped.report(init);
+			return code;
+		}
 		if (argBudget(init)) |budget| {
 			const bytes = argumentBytes(command, processed.items);
 			if (bytes > budget.safe) {
 				var buffer: [256]u8 = undefined;
 				const message = try std.fmt.bufPrint(&buffer, "Error: expanded arguments exceed safe ARG_MAX budget ({d} bytes > {d}; system ARG_MAX {d}). Re-run with --batch.\n", .{ bytes, budget.safe, budget.maximum });
 				try stderr(init, message);
+				if (!options.mute) try skipped.report(init);
 				return 2;
 			}
 		}
-		return runCommand(init, command, processed.items);
+		const code = try runCommand(init, command, processed.items);
+		if (!options.mute) try skipped.report(init);
+		return code;
 	}
 
 	std.mem.sort([]const u8, processed.items, {}, lessThanString);
 	try writeResults(init, processed.items, options.format);
+	if (!options.mute) try skipped.report(init);
 	return 0;
 }
 
@@ -199,8 +220,16 @@ fn stdout(init: std.process.Init, message: []const u8) !void {
 	try std.Io.File.stdout().writeStreamingAll(init.io, message);
 }
 
+var stderr_line_start = true;
 fn stderr(init: std.process.Init, message: []const u8) !void {
-	try std.Io.File.stderr().writeStreamingAll(init.io, message);
+	var rest = message;
+	while (rest.len > 0) {
+		if (stderr_line_start and !std.mem.startsWith(u8, rest, "glob: ")) try std.Io.File.stderr().writeStreamingAll(init.io, "glob: ");
+		const end = if (std.mem.indexOfScalar(u8, rest, '\n')) |at| at + 1 else rest.len;
+		try std.Io.File.stderr().writeStreamingAll(init.io, rest[0..end]);
+		stderr_line_start = rest[end - 1] == '\n';
+		rest = rest[end..];
+	}
 }
 
 fn printAbout(init: std.process.Init) !void {
@@ -217,9 +246,9 @@ fn printAbout(init: std.process.Init) !void {
 	};
 	var buffer: [192]u8 = undefined;
 	const message = if (builtin.target.os.tag == .linux)
-		try std.fmt.bufPrint(&buffer, "glob {s} — controlled pathname expansion; PF={s}-{s} VARIANT={s}\n", .{ version, os, arch, if (builtin.target.abi.isMusl()) "musl" else "gnu" })
+		try std.fmt.bufPrint(&buffer, "glob {s} REV={s} — controlled pathname expansion; PF={s}-{s} VARIANT={s}\n", .{ version, build_identity.revision, os, arch, if (builtin.target.abi.isMusl()) "musl" else "gnu" })
 	else
-		try std.fmt.bufPrint(&buffer, "glob {s} — controlled pathname expansion; PF={s}-{s}\n", .{ version, os, arch });
+		try std.fmt.bufPrint(&buffer, "glob {s} REV={s} — controlled pathname expansion; PF={s}-{s}\n", .{ version, build_identity.revision, os, arch });
 	try stdout(init, message);
 }
 
@@ -259,11 +288,32 @@ fn executableFile(init: std.process.Init, path: []const u8) bool {
 
 const Expansion = struct {
 	matches: std.ArrayListUnmanaged([]const u8) = .empty,
-	excluded_dotfile: bool = false,
 };
 
-fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: bool, dotglob: bool) !Expansion {
-	const compiled = try globlike.compile(init.gpa, source, .{ .case_insensitive = case_insensitive });
+const SkipReason = enum { hidden, gitignore };
+const SkipSummary = struct {
+	entries: std.StringHashMapUnmanaged(SkipReason) = .empty,
+	hidden: usize = 0,
+	gitignored: usize = 0,
+	hidden_dirs: usize = 0,
+	gitignored_dirs: usize = 0,
+	fn record(self: *SkipSummary, init: std.process.Init, absolute: []const u8, reason: SkipReason, pruned: bool) !void {
+		if (self.entries.contains(absolute)) return;
+		try self.entries.put(init.arena.allocator(), try init.arena.allocator().dupe(u8, absolute), reason);
+		switch (reason) {
+			.hidden => { self.hidden += 1; if (pruned) self.hidden_dirs += 1; },
+			.gitignore => { self.gitignored += 1; if (pruned) self.gitignored_dirs += 1; },
+		}
+	}
+	fn report(self: *const SkipSummary, init: std.process.Init) !void {
+		var buffer: [384]u8 = undefined;
+		if (self.hidden > 0) try stderr(init, try std.fmt.bufPrint(&buffer, "skipped {d} hidden entries ({d} directory subtrees not scanned); use --hidden, --dotglob or --all to include them; --mute silences this summary.\n", .{ self.hidden, self.hidden_dirs }));
+		if (self.gitignored > 0) try stderr(init, try std.fmt.bufPrint(&buffer, "skipped {d} .gitignore entries ({d} directory subtrees not scanned); use --gitignore or --gitignored to include them; --mute silences this summary.\n", .{ self.gitignored, self.gitignored_dirs }));
+	}
+};
+
+fn expandPattern(init: std.process.Init, source: []const u8, options: Options, filter: *ignore.Filter, skipped: *SkipSummary) !Expansion {
+	const compiled = try globlike.compile(init.gpa, source, .{ .case_insensitive = options.ignore_case });
 	var pattern = switch (compiled) {
 		.diagnostic => |diagnostic| {
 			try reportDiagnostic(init, "invalid pattern", diagnostic);
@@ -273,7 +323,7 @@ fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: b
 	};
 	defer pattern.deinit();
 
-	const plan = traversalPlan(source, case_insensitive);
+	const plan = traversalPlan(source, options.ignore_case);
 	var directory = (if (std.fs.path.isAbsolute(plan.root))
 		std.Io.Dir.openDirAbsolute(init.io, plan.root, .{ .iterate = true })
 	else
@@ -283,6 +333,16 @@ fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: b
 		return error.TraversalFailed;
 	};
 	defer directory.close(init.io);
+	const cwd_absolute = try std.Io.Dir.cwd().realPathFileAlloc(init.io, ".", init.gpa);
+	defer init.gpa.free(cwd_absolute);
+	const root_absolute = try std.fs.path.resolve(init.gpa, &.{ cwd_absolute, plan.root });
+	defer init.gpa.free(root_absolute);
+	if (!options.include_gitignored) {
+		if (try filter.excludedRoot(init, root_absolute)) |excluded| {
+			try skipped.record(init, excluded, .gitignore, true);
+			return .{};
+		}
+	}
 	var walker = try directory.walkSelectively(init.gpa);
 	defer walker.deinit();
 
@@ -293,31 +353,42 @@ fn expandPattern(init: std.process.Init, source: []const u8, case_insensitive: b
 		try reportError(init, "cannot traverse directory", err);
 		return error.TraversalFailed;
 	}) |entry| {
-		// A wildcard without recursive syntax cannot consume extra path components.
-		// Enter before matching so unmatched directories can still contain matches.
-		if (entry.kind == .directory and (plan.max_depth == null or entry.depth() < plan.max_depth.?)) {
-			walker.enter(init.io, entry) catch |err| {
-				try reportError(init, "cannot traverse directory", err);
-				return error.TraversalFailed;
-			};
-		}
 		if (std.mem.indexOfScalar(u8, entry.path, '\n') != null) continue;
 		candidate_buffer.clearRetainingCapacity();
 		try candidate_buffer.appendSlice(init.gpa, plan.prefix);
 		if (plan.prefix.len > 0 and plan.prefix[plan.prefix.len - 1] != '/') try candidate_buffer.append(init.gpa, '/');
 		try candidate_buffer.appendSlice(init.gpa, entry.path);
 		const candidate = candidate_buffer.items;
-		switch (pattern.matches(candidate)) {
-			.matched => |matched| if (matched) {
-				// Preserve the dotfile advisory without compiling and walking twice.
-				if (!std.mem.startsWith(u8, std.fs.path.basename(source), ".") and std.mem.startsWith(u8, entry.basename, ".")) expansion.excluded_dotfile = true;
-				if (dotglob or dotPathAllowed(source, candidate)) try expansion.matches.append(init.arena.allocator(), try init.arena.allocator().dupe(u8, candidate));
-			},
+		var can_descend = entry.kind == .directory and (plan.max_depth == null or entry.depth() < plan.max_depth.?);
+		const hidden = !options.include_dotfiles and !dotPathAllowed(source, candidate);
+		const hidden_descent = can_descend and !options.include_dotfiles and !dotPathAllowedInner(source, candidate, true);
+		const absolute = try std.fs.path.join(init.gpa, &.{ root_absolute, entry.path });
+		defer init.gpa.free(absolute);
+		const gitignored = !hidden and !options.include_gitignored and try filter.isIgnored(init, absolute, entry.kind == .directory);
+		if ((hidden or gitignored) and can_descend) {
+			try skipped.record(init, absolute, if (hidden) .hidden else .gitignore, true);
+			continue;
+		}
+		const matched = switch (pattern.matches(candidate)) {
+			.matched => |matched| matched,
 			.diagnostic => |diagnostic| {
 				try reportDiagnostic(init, "matching failed", diagnostic);
 				return error.InvalidPattern;
 			},
+		};
+		if (hidden_descent) {
+			can_descend = false;
+			if (!matched) try skipped.record(init, absolute, .hidden, true);
 		}
+		if (hidden or gitignored) {
+			if (matched) try skipped.record(init, absolute, if (hidden) .hidden else .gitignore, false);
+			continue;
+		}
+		if (matched) try expansion.matches.append(init.arena.allocator(), try init.arena.allocator().dupe(u8, candidate));
+		if (can_descend) walker.enter(init.io, entry) catch |err| {
+			try reportError(init, "cannot traverse directory", err);
+			return error.TraversalFailed;
+		};
 	}
 	return expansion;
 }
@@ -480,14 +551,18 @@ fn reportDiagnostic(init: std.process.Init, context: []const u8, diagnostic: glo
 }
 
 fn dotPathAllowed(pattern: []const u8, path: []const u8) bool {
+	return dotPathAllowedInner(pattern, path, false);
+}
+
+fn dotPathAllowedInner(pattern: []const u8, path: []const u8, needs_descendant: bool) bool {
 	if (!hasHiddenComponent(path)) return true;
 	if (std.mem.startsWith(u8, pattern, "regex:") or std.mem.indexOf(u8, pattern, "%r") != null) return false;
 	const glob_pattern = if (std.mem.startsWith(u8, pattern, "glob:")) pattern[5..] else pattern;
-	return dotComponentsAllowed(trimPathPrefix(glob_pattern), trimPathPrefix(path));
+	return dotComponentsAllowed(trimPathPrefix(glob_pattern), trimPathPrefix(path), needs_descendant);
 }
 
-fn dotComponentsAllowed(pattern: []const u8, path: []const u8) bool {
-	if (path.len == 0) return true;
+fn dotComponentsAllowed(pattern: []const u8, path: []const u8, needs_descendant: bool) bool {
+	if (path.len == 0) return !needs_descendant or pattern.len > 0;
 	if (pattern.len == 0) return false;
 	const pattern_end = std.mem.indexOfScalar(u8, pattern, '/') orelse pattern.len;
 	const path_end = std.mem.indexOfScalar(u8, path, '/') orelse path.len;
@@ -496,12 +571,12 @@ fn dotComponentsAllowed(pattern: []const u8, path: []const u8) bool {
 	const pattern_rest = trimLeadingSlashes(pattern[pattern_end..]);
 	const path_rest = trimLeadingSlashes(path[path_end..]);
 	if (std.mem.eql(u8, pattern_component, "**")) {
-		if (dotComponentsAllowed(pattern_rest, path)) return true;
+		if (dotComponentsAllowed(pattern_rest, path, needs_descendant)) return true;
 		if (path_component[0] == '.') return false;
-		return dotComponentsAllowed(pattern, path_rest);
+		return dotComponentsAllowed(pattern, path_rest, needs_descendant);
 	}
 	if (path_component[0] == '.' and !std.mem.startsWith(u8, pattern_component, ".")) return false;
-	return dotComponentsAllowed(pattern_rest, path_rest);
+	return dotComponentsAllowed(pattern_rest, path_rest, needs_descendant);
 }
 
 fn trimPathPrefix(path: []const u8) []const u8 {

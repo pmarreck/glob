@@ -31,6 +31,7 @@ run_suite() {
 run_suite "$repo_root/tests/cli/glob_test"
 run_suite "$repo_root/tests/cli/static_binary_test"
 run_suite "$repo_root/tests/cli/traversal_test"
+run_suite "$repo_root/tests/cli/exclusions_test"
 run_suite "$repo_root/tests/compat/dotfiles_glob_test"
 run_suite "$repo_root/tests/compat/dotfiles_no_compgen_test"
 

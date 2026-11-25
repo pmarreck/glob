@@ -602,7 +602,7 @@ EOF
   (( tests++ ))
   touch warn.txt
   warning=$(glob --double-quote -n "*.txt" 2>&1 >/dev/null)
-  assert "$warning" == "Warning: -n is ignored when --double-quote is used" "glob should warn when -n is combined with --double-quote"
+  assert "$warning" == "glob: Warning: -n is ignored when --double-quote is used" "glob should warn when -n is combined with --double-quote"
   (( fails += $? ))
   rm -f warn.txt
 
@@ -610,7 +610,7 @@ EOF
   (( tests++ ))
   touch warn0.txt
   warning=$(glob --double-quote -0 "*.txt" 2>&1 >/dev/null)
-  assert "$warning" == "Warning: -0 is ignored when --double-quote is used" "glob should warn when -0 is combined with --double-quote"
+  assert "$warning" == "glob: Warning: -0 is ignored when --double-quote is used" "glob should warn when -0 is combined with --double-quote"
   (( fails += $? ))
   rm -f warn0.txt
 
@@ -688,7 +688,7 @@ EOF
   (( tests++ ))
   touch visible.txt .hidden.txt
   warning=$(glob "*.txt" 2>&1 >/dev/null)
-  assert "$warning" =~ "dotfile" "glob should warn when dotfiles were excluded but would have matched"
+  assert "$warning" =~ "hidden entries" "glob should warn when dotfiles were excluded but would have matched"
   (( fails += $? ))
   rm -f visible.txt .hidden.txt
 
@@ -712,7 +712,7 @@ EOF
   (( tests++ ))
   touch visible.txt .hidden.txt
   warning=$(glob echo "*.txt" 2>&1 >/dev/null)
-  assert "$warning" =~ "dotfile" "glob should warn about dotfiles in command mode too"
+  assert "$warning" =~ "hidden entries" "glob should warn about dotfiles in command mode too"
   (( fails += $? ))
   rm -f visible.txt .hidden.txt
 
@@ -755,7 +755,7 @@ EOF
   # Test 60: Error message when no matches found for a pattern
   (( tests++ ))
   error_msg=$(glob "*.nonexistent" 2>&1 >/dev/null)
-  assert "$error_msg" == "Error: No matches found for pattern(s): *.nonexistent" "glob should print an error reason to stderr when no patterns match"
+  assert "$error_msg" == "glob: Error: No matches found for pattern(s): *.nonexistent" "glob should print an error reason to stderr when no patterns match"
   (( fails += $? ))
 
   # Test 61: Error message when no arguments are provided

@@ -84,45 +84,47 @@ touch "$scratch/work/image.JPG" "$scratch/work/image.png" "$scratch/work/.hidden
 touch "$scratch/work/.secret/.hidden.txt"
 touch "$scratch/work/photo-2024.asset" "$scratch/work/photo-abcd.asset"
 
+hidden_single='glob: skipped 1 hidden entries (0 directory subtrees not scanned); use --hidden, --dotglob or --all to include them; --mute silences this summary.'
+hidden_recursive='glob: skipped 2 hidden entries (1 directory subtrees not scanned); use --hidden, --dotglob or --all to include them; --mute silences this summary.'
 run '*.txt'
-check_result 'direct mode classifies and code-point sorts a set' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+check_result 'direct mode classifies and code-point sorts a set' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt' "$hidden_single"
 
 run '*.txt' '*.png' 'missing-*.log'
-check_result 'multiple patterns form a sorted union while misses disappear' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nimage.png' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+check_result 'multiple patterns form a sorted union while misses disappear' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nimage.png' "$hidden_single"
 
 run 'missing-*.txt'
-check_result 'an unmatched pattern explains exit 1' 1 '' 'Error: No matches found for pattern(s): missing-*.txt'
+check_result 'an unmatched pattern explains exit 1' 1 '' 'glob: Error: No matches found for pattern(s): missing-*.txt'
 
 run printf '<%s>\n' 'literal first' '*.png' '*.txt'
-check_result 'command mode preserves literal and pattern order' 0 $'<literal first>\n<image.png>\n<alpha.txt>\n<beta.txt>\n<file with spaces.txt>' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+check_result 'command mode preserves literal and pattern order' 0 $'<literal first>\n<image.png>\n<alpha.txt>\n<beta.txt>\n<file with spaces.txt>' "$hidden_single"
 
 run '**/*.txt'
-check_result 'globstar recursively classifies nested paths' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nnested/deeper/delta.txt\nnested/gamma.txt' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+check_result 'globstar recursively classifies nested paths' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nnested/deeper/delta.txt\nnested/gamma.txt' "$hidden_recursive"
 
 run --dotglob '*.txt'
 check_result '--dotglob includes hidden members without a warning' 0 $'.hidden.txt\nalpha.txt\nbeta.txt\nfile with spaces.txt' ''
 
 run '**/.hidden.txt'
-check_result 'an explicit dot component matches without traversing hidden parents' 0 '.hidden.txt' ''
+check_result 'an explicit dot component matches without traversing hidden parents' 0 '.hidden.txt' 'glob: skipped 1 hidden entries (1 directory subtrees not scanned); use --hidden, --dotglob or --all to include them; --mute silences this summary.'
 
 run -i 'image.*'
 check_result 'case-insensitive mode expands a mixed-case set' 0 $'image.JPG\nimage.png' ''
 
 run '*.{txt,png}'
-check_result 'quoted brace expansion combines pattern sets' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nimage.png' ''
+check_result 'quoted brace expansion combines pattern sets' 0 $'alpha.txt\nbeta.txt\nfile with spaces.txt\nimage.png' "$hidden_single"
 
 run '@(*.JPG|*.png)'
 check_result 'extended globs classify alternatives' 0 $'image.JPG\nimage.png' ''
 
 run 'photo-%r{[0-9]{4}}.asset'
-check_result 'inline regex is matched by the shared globlike engine' 0 'photo-2024.asset' ''
+check_result 'inline regex is matched by the shared globlike engine' 0 'photo-2024.asset' 'glob: skipped 1 hidden entries (1 directory subtrees not scanned); use --hidden, --dotglob or --all to include them; --mute silences this summary.'
 
 run 'photo-%r{['
 check_result 'invalid shared patterns return a precise diagnostic' 2 '' \
 	'glob: invalid pattern at byte 6: unclosed regex excerpt'
 
 run -n '*.txt'
-check_result '-n emits shell-escaped space-separated output' 0 'alpha.txt beta.txt file\ with\ spaces.txt ' $'\033[33mNote: dotfiles were excluded. Use --dotglob or --all to include them.\033[0m'
+check_result '-n emits shell-escaped space-separated output' 0 'alpha.txt beta.txt file\ with\ spaces.txt ' "$hidden_single"
 
 run -0 '*.png'
 tests=$((tests + 1))
@@ -137,10 +139,10 @@ run --double-quote 'file *quote*.txt'
 check_result '--double-quote escapes embedded quotes without an external helper' 0 '"file \"quote\".txt"' ''
 
 run --double-quote printf '%s\n' '*.txt'
-check_result '--double-quote rejects command mode' 2 '' 'Error: --double-quote cannot be used with command execution'
+check_result '--double-quote rejects command mode' 2 '' 'glob: Error: --double-quote cannot be used with command execution'
 
 run --dry-run printf '<%s>\n' '*.png'
-check_result '--dry-run prints a shell-escaped command and does not execute it' 0 '' $'\033[33mprintf \\<%s\\>\\\\n image.png\033[0m'
+check_result '--dry-run prints a shell-escaped command and does not execute it' 0 '' $'glob: \033[33mprintf \\<%s\\>\\\\n image.png\033[0m'
 
 disable_compgen="$scratch/disable-compgen"
 printf 'enable -n compgen 2>/dev/null\n' >"$disable_compgen"

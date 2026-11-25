@@ -2,6 +2,11 @@
 
 See [completed history](docs/PLAN_LOG.md), [project intent](INTENT.md), and [terminology](TERMINOLOGY.md).
 
+## Transparent default exclusions
+
+- [x] Prune hidden and .gitignore-excluded subtrees, preserve explicit overrides, and report unique skipped frontier entries unless --mute is specified. (done 2026-11-25 18:54 EST; commit: this commit)
+- [x] Differential-test ignore semantics against Git and enforce pruning with directory syscall traces before shipping. (done 2026-11-25 18:54 EST; commit: this commit)
+
 ## Bounded directory traversal
 
 - [x] Reproduce the slow single-component glob, bound traversal to the pattern's possible depth/root, and enforce the work bound with independent directory syscall traces. (context: docs/traversal-performance.md; done 2026-11-19 11:10 EST; commit: this commit)

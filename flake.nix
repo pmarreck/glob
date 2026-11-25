@@ -12,6 +12,7 @@
 	outputs = { self, nixpkgs, zig-overlay }:
 		let
 			systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+			buildRevision = if self ? rev && self ? revCount then "r${toString self.revCount}-${builtins.substring 0 6 self.rev}" else "unavailable";
 			forAllSystems = function: nixpkgs.lib.genAttrs systems (system: function system);
 			products = system:
 				let
@@ -51,7 +52,7 @@
 							mkdir -p "$ZIG_GLOBAL_CACHE_DIR"
 							cp -R ${zigDeps}/p "$ZIG_GLOBAL_CACHE_DIR/"
 							chmod -R u+w "$ZIG_GLOBAL_CACHE_DIR"
-							zig build -Doptimize=ReleaseFast --prefix "$out" ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "-Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl"}
+							zig build -Doptimize=ReleaseFast -Dbuild-revision=${buildRevision} --prefix "$out" ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "-Dtarget=${pkgs.stdenv.hostPlatform.parsed.cpu.name}-linux-musl"}
 							runHook postBuild
 						'';
 						installPhase = "true";
@@ -63,7 +64,7 @@
 							platforms = systems;
 						};
 					};
-					testTools = [ pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.gnused ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils pkgs.glibc.bin pkgs.strace ];
+					testTools = [ pkgs.bash pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.git ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils pkgs.glibc.bin pkgs.strace ];
 					test = pkgs.stdenvNoCC.mkDerivation {
 						pname = "glob-tests";
 						version = "0.3.0";
@@ -75,7 +76,7 @@
 						GLOB_BIN = "${package}/bin/glob";
 						checkPhase = ''
 							runHook preCheck
-							patchShebangs test tests/cli/glob_test tests/cli/static_binary_test tests/cli/traversal_test tests/compat/dotfiles_glob_test tests/compat/dotfiles_no_compgen_test
+							patchShebangs test tests/cli/glob_test tests/cli/static_binary_test tests/cli/traversal_test tests/cli/exclusions_test tests/compat/dotfiles_glob_test tests/compat/dotfiles_no_compgen_test
 							./test
 							${package}/bin/glob --about >/dev/null
 							runHook postCheck
@@ -98,7 +99,7 @@
 			checks = forAllSystems (system: let built = products system; in { build = built.package; test = built.test; });
 			devShells = forAllSystems (system: let pkgs = nixpkgs.legacyPackages.${system}; in {
 				default = pkgs.mkShell {
-					packages = [ pkgs.bashInteractive pkgs.luajit pkgs.shellcheck zig-overlay.packages.${system}."0.16.0" ]
+					packages = [ pkgs.bashInteractive pkgs.luajit pkgs.shellcheck pkgs.git zig-overlay.packages.${system}."0.16.0" ]
 						++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.binutils pkgs.strace ];
 				};
 			});

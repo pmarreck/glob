@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+
+set -u
+repo_root=$(CDPATH='' cd -- "${BASH_SOURCE[0]%/*}/../.." && pwd)
+glob_bin=${GLOB_BIN:-$repo_root/bin/glob}
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/glob-exclusions.XXXXXX") || exit 1
+trap 'cd "$repo_root"; case "$scratch" in "${TMPDIR:-/tmp}"/glob-exclusions.*) rm -rf -- "$scratch";; esac' EXIT
+mkdir -p "$scratch/work/.cache/deep" "$scratch/work/build/deep" "$scratch/work/visible" || exit 1
+touch "$scratch/work/word-root" "$scratch/work/.cache/deep/word-hidden" "$scratch/work/build/deep/word-ignored" "$scratch/work/visible/word-visible"
+printf 'build/\nword-excluded\n' > "$scratch/work/.gitignore"
+touch "$scratch/work/word-excluded"
+cd "$scratch/work" || exit 1
+failures=0
+check() {
+	local label=$1 expected=$2; shift 2
+	"$glob_bin" "$@" > "$scratch/out" 2> "$scratch/err"
+	local status=$? actual
+	actual=$(cat "$scratch/out")
+	if [[ $status != 0 || "$actual" != "$expected" ]]; then
+		printf 'FAIL %s: status=%s output=<%s> expected=<%s>\n' "$label" "$status" "$actual" "$expected" >&2
+		failures=$((failures + 1))
+	fi
+}
+visible=$'visible/word-visible\nword-root'
+check 'default excludes both policies' "$visible" '**/word*'
+if ! grep -q -- '--hidden' "$scratch/err" || ! grep -q -- '--gitignored' "$scratch/err" || ! grep -q '2 .gitignore entries' "$scratch/err"; then
+	printf 'FAIL exclusion summary must count two .gitignore frontier entries and explain both overrides\n' >&2
+	failures=$((failures + 1))
+fi
+check 'mute changes only diagnostics' "$visible" --mute '**/word*'
+if [[ -s "$scratch/err" ]]; then printf 'FAIL --mute must silence summaries\n' >&2; failures=$((failures + 1)); fi
+check 'hidden override is independent' $'.cache/deep/word-hidden\nvisible/word-visible\nword-root' --hidden --mute '**/word*'
+check 'ignored override is independent' $'build/deep/word-ignored\nvisible/word-visible\nword-excluded\nword-root' --gitignored --mute '**/word*'
+check 'gitignore alias' $'build/deep/word-ignored\nvisible/word-visible\nword-excluded\nword-root' --gitignore --mute '**/word*'
+check 'all overrides both policies' $'.cache/deep/word-hidden\nbuild/deep/word-ignored\nvisible/word-visible\nword-excluded\nword-root' --all --mute '**/word*'
+check 'explicit hidden prefix remains accessible' '.cache/deep/word-hidden' --mute '.cache/**/word*'
+check 'literal prefix still obeys inherited ignore rules' 'word-root' --mute 'build/**/word*' 'word-root'
+check 'overlapping patterns do not double count exclusions' $'visible/word-visible\nvisible/word-visible\nword-root\nword-root' '**/word*' '**/word*'
+if ! grep -q '2 .gitignore entries' "$scratch/err"; then printf 'FAIL summaries double counted overlapping patterns\n' >&2; failures=$((failures + 1)); fi
+"$glob_bin" --mute 'missing-*' > "$scratch/out" 2> "$scratch/err"
+if [[ $? != 1 ]] || ! grep -q 'No matches' "$scratch/err"; then printf 'FAIL --mute hid a real error\n' >&2; failures=$((failures + 1)); fi
+
+if [[ $(uname -s) == Linux ]]; then
+	strace -f -qq -yy -e trace=getdents64 -o "$scratch/trace" "$glob_bin" --mute '**/word*' > "$scratch/out" 2> "$scratch/err"
+	trace_status=$?
+	if [[ $trace_status != 0 ]] || grep -F -e "<$scratch/work/.cache>" -e "<$scratch/work/.cache/" -e "<$scratch/work/build>" -e "<$scratch/work/build/" "$scratch/trace" >/dev/null; then
+		printf 'FAIL default search enumerated an excluded subtree\n' >&2; failures=$((failures + 1))
+		cat "$scratch/trace" "$scratch/err" >&2
+	fi
+fi
+
+# Independent oracle: Git's own ignore evaluator, with no index/global rules.
+# Matching files have a common suffix so metadata and directory results cannot
+# accidentally conceal an ignored/unignored classification error.
+oracle="$scratch/oracle"
+mkdir -p "$oracle/sub" "$oracle/cache/deep" "$oracle/blocked" "$oracle/pair/x/y" "$oracle/odd/inner" "$scratch/home"
+git -c init.templateDir= init -q "$oracle" || exit 1
+printf '%s\n' '*.tmp.asset' '!keep.tmp.asset' '/anchored.asset' 'cache/' 'blocked/' '!blocked/keep.asset' 'pair/**/junk?.asset' '**/log.asset' 'literal@(x).asset' '%r{weird}.asset' '\#hash.asset' '\!bang.asset' 'odd**name.asset' 'trailing.asset\ ' '[ab]test.asset' > "$oracle/.gitignore"
+printf '%s\n' '!a.tmp.asset' 'local.asset' > "$oracle/sub/.gitignore"
+paths=(plain.asset a.tmp.asset keep.tmp.asset anchored.asset sub/anchored.asset sub/a.tmp.asset sub/local.asset cache/deep/cache.asset blocked/keep.asset pair/junk1.asset pair/x/y/junk2.asset pair/x/y/safe.asset sub/log.asset 'literal@(x).asset' '%r{weird}.asset' '#hash.asset' '!bang.asset' oddXname.asset odd/inner/name.asset 'trailing.asset ' atest.asset btest.asset ctest.asset)
+: > "$scratch/expected"
+for path in "${paths[@]}"; do
+	touch "$oracle/$path"
+	HOME="$scratch/home" GIT_CONFIG_NOSYSTEM=1 git -C "$oracle" -c core.excludesFile=/dev/null check-ignore --no-index -q -- "$path"
+	oracle_status=$?
+	if [[ $oracle_status == 1 ]]; then printf '%s\n' "$path" >> "$scratch/expected";
+	elif [[ $oracle_status != 0 ]]; then printf 'FAIL Git oracle for %s\n' "$path" >&2; failures=$((failures + 1)); fi
+done
+LC_ALL=C sort "$scratch/expected" > "$scratch/sorted-expected"
+cd "$oracle" || exit 1
+"$glob_bin" --mute '**/*.asset*' > "$scratch/out" 2> "$scratch/err"
+glob_status=$?
+if [[ $glob_status != 0 ]] || ! cmp -s "$scratch/out" "$scratch/sorted-expected"; then
+	printf 'FAIL .gitignore results disagree with git check-ignore\n' >&2
+	diff -u "$scratch/sorted-expected" "$scratch/out" >&2
+	cat "$scratch/err" >&2
+	failures=$((failures + 1))
+fi
+
+# A child owns its stderr; only glob's own diagnostics receive its tag.
+cd "$scratch/work" || exit 1
+check 'child stderr is untouched' "$visible" bash -c 'printf "child message\n" >&2; printf "%s\n" "$@"' _ '**/word*'
+if ! grep -qx 'child message' "$scratch/err" || grep -q '^glob: child message' "$scratch/err" || grep -v '^glob: \|^child message$' "$scratch/err" >/dev/null; then
+	printf 'FAIL stderr tagging changed child output or left untagged glob diagnostics\n' >&2
+	failures=$((failures + 1))
+fi
+if [[ $(head -n 1 "$scratch/err") != 'child message' || $(tail -n 1 "$scratch/err") != glob:\ skipped* ]]; then
+	printf 'FAIL summaries must follow child stderr at the end\n' >&2
+	failures=$((failures + 1))
+fi
+
+# Explicitly searching inside a repository starts at that repository's boundary;
+# the meta-workspace's blanket rule must not hide a separately rooted project.
+mkdir -p "$scratch/meta/project" || exit 1
+git -c init.templateDir= init -q "$scratch/meta" || exit 1
+git -c init.templateDir= init -q "$scratch/meta/project" || exit 1
+printf '*/\n' > "$scratch/meta/.gitignore"
+touch "$scratch/meta/project/word-project"
+check 'separately rooted repository ignores outer rules' "$scratch/meta/project/word-project" --mute "$scratch/meta/project/**/word*"
+if (( failures == 0 )); then printf 'PASS default exclusion results, overrides, summaries, mute, and pruning\n'; fi
+exit "$failures"

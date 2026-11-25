@@ -37,6 +37,7 @@ library.
 - Preserve the characterized CLI behavior and exit codes.
 - Keep expansion independent of Bash programmable completion (`compgen`).
 - Keep output ordering independent of the caller's locale.
+- Respect `.gitignore` and prune hidden paths by default, with independent explicit inclusion overrides and tagged end-of-run exclusion summaries that `--mute` can silence.
 - Ship one native `glob` executable with `globlike` and its non-system runtime dependencies linked into it; ordinary use must not require Bash, a sidecar engine, Nix, or `/nix/store`.
 - Keep the explicit-globbing argument framed as Peter's design opinion, without
   claiming that early Unix users normally invoked `/etc/glob` themselves.
