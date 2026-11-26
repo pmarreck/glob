@@ -168,6 +168,15 @@ else
 	fail '--about reports immutable compiled-target identity' "status=$status lines=$about_lines stdout=$(cat "$stdout_file") stderr=$(cat "$stderr_file")"
 fi
 
+about_identity=$("$glob_bin" --about)
+expected_revision=${about_identity#*REV=}
+expected_revision=${expected_revision%% *}
+run_env REV=spoofed VERSION=spoofed "$glob_bin" --version
+check_result '--version reports the compiled REV, without environment overrides' 0 "$expected_revision" ''
+
+run printf '%s\n' --version
+check_result 'command-mode --version remains a child argument' 0 '--version' ''
+
 if (( failures == 0 )); then
 	printf '1..%d\n' "$tests"
 else

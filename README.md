@@ -94,6 +94,7 @@ Options:
 - `-n`: emit shell-escaped results separated by spaces.
 - `-0`: emit NUL-separated results.
 - `-h`, `--help`: show command help.
+- `--version`: print the compiled `REV` build revision (`rN-abcdef`).
 - `--about`: show version and immutable compiled platform/ABI identity.
 
 Patterns support `*`, `?`, bracket expressions, `**`, `%r{...}` inline regex

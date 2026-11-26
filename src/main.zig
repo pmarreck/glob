@@ -28,6 +28,7 @@ const help =
 	\\  glob [OPTIONS] PATTERN                   Expand patterns and print results
 	\\  glob [OPTIONS] COMMAND [ARG...]          Run a command with expanded arguments
 	\\  glob -h, --help                          Show this help
+	\\  glob --version                           Show the compiled REV
 	\\  glob --about                             Show version and compiled platform
 	\\
 	\\OPTIONS:
@@ -67,6 +68,11 @@ pub fn main(init: std.process.Init) !u8 {
 	}
 	if (std.mem.eql(u8, raw.items[0], "--about")) {
 		try printAbout(init);
+		return 0;
+	}
+	if (std.mem.eql(u8, raw.items[0], "--version")) {
+		try stdout(init, build_identity.revision);
+		try stdout(init, "\n");
 		return 0;
 	}
 
